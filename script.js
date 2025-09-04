@@ -143,69 +143,95 @@ function wrapPlaylist(obj) {
 /* ---------- Calendar handling ---------- */
 
 async function currentThread(now) {
-  // Try ICS first (via proxy), then fallback schedule
-  const icsUrl = CFG.ics_proxy_url || CFG.ics_url;
-  // URL override for testing: ?force=p1 (or p2, etc.)
+  const tz = CFG.timezone || 'America/Los_Angeles';
+
+  // URL override for testing: ?force=p1
   const q = new URL(location.href).searchParams;
   const force = q.get('force');
-  if (force) return { thread: force, start: null, end: null, summary: '(forced)' };
+  if (force) return { thread: force, start: null, end: null, summary: '(forced)', debug: { reason: 'forced' } };
 
-  let ev = null;
-  if (icsUrl) {
+  const icsUrlList = Array.isArray(CFG.ics_urls)
+    ? CFG.ics_urls
+    : (CFG.ics_proxy_url || CFG.ics_url ? [CFG.ics_proxy_url || CFG.ics_url] : []);
+
+  let debugInfo = { reason: '', lookedAt: [], nextEvent: null };
+  let found = null;
+
+  for (const url of icsUrlList) {
     try {
-      const icsText = await fetchText(icsUrlWithCacheBust(icsUrl));
-      ev = pickCurrentICSEvent(icsText, now, CFG.timezone);
-    } catch (_) { /* ignore */ }
-  }
+      const icsText = await fetchText(icsUrlWithCacheBust(url));
+      const events = parseICSEvents(icsText);
+      const parsed = events.map(e => {
+        const start = parseICSDateValue(e.DTSTART, e.DTSTART_TZID, tz);
+        const end   = parseICSDateValue(e.DTEND,   e.DTEND_TZID,   tz);
+        return { summary: e.SUMMARY || '', start, end, allDay: e.DTSTART_VALUE === 'DATE' || e.DTEND_VALUE === 'DATE' };
+      }).filter(e => e.start && e.end);
 
-  if (!ev) {
-    const fb = await fetchJSON('fallback-schedule.json').catch(()=>null);
-    if (fb) {
-      const dayKey = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][now.getDay()];
-      const blocks = fb[dayKey] || [];
-      for (const b of blocks) {
-        const {start, end} = blockToDates(now, b.start, b.end);
-        if (now >= start && now < end) {
-          return { thread: b.thread, start, end };
+      // sort by start time
+      parsed.sort((a,b) => a.start - b.start);
+
+      // find current containing now
+      const current = parsed.find(e => now >= e.start && now < e.end);
+
+      // grace window: if none, take event starting within next 2 minutes
+      const GRACE_MS = 2 * 60 * 1000;
+      const soon = parsed.find(e => e.start >= now && (e.start - now) <= GRACE_MS);
+
+      debugInfo.lookedAt.push({ url, count: parsed.length, first: parsed[0]?.start?.toString() || null, last: parsed.at(-1)?.end?.toString() || null });
+
+      if (current || soon) {
+        const hit = current || soon;
+        const title = (hit.summary || '').toLowerCase();
+
+        // Extract period number/letter if present (handles "1st period", "period 2", "p3", "Period A", "p10")
+        const numMatch = title.match(/\b(?:p(?:eriod)?\s*)?([0-9]{1,2}|[a-z])\b/);
+        let thread = null;
+        if (numMatch) {
+          const token = numMatch[1];
+          thread = isNaN(token) ? ('p' + token) : ('p' + parseInt(token, 10));
+        } else {
+          // fallback to event_map
+          const key = Object.keys(CFG.event_map || {}).find(k => title.includes(k.toLowerCase()));
+          thread = key ? CFG.event_map[key] : CFG.default_thread;
         }
+
+        found = { thread, start: hit.start, end: hit.end, summary: hit.summary, debug: { reason: current ? 'current' : 'grace', url } };
+        break;
       }
-      return { thread: null, start: null, end: null };
+
+      // keep the next upcoming event for debug
+      const upcoming = parsed.find(e => e.start >= now);
+      if (!debugInfo.nextEvent && upcoming) {
+        debugInfo.nextEvent = {
+          summary: upcoming.summary,
+          start: upcoming.start?.toString(),
+          end: upcoming.end?.toString()
+        };
+      }
+    } catch (err) {
+      debugInfo.lookedAt.push({ url, error: err.message || String(err) });
+      continue;
     }
   }
 
-  if (!ev) return { thread: null, start: null, end: null };
+  if (found) return found;
 
-  const title = (ev.summary || '').toLowerCase();
+  // fallback-schedule as last resort
+  try {
+    const fb = await fetchJSON('fallback-schedule.json');
+    const dayKey = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][now.getDay()];
+    const blocks = fb[dayKey] || [];
+    for (const b of blocks) {
+      const {start, end} = blockToDates(now, b.start, b.end);
+      if (now >= start && now < end) {
+        return { thread: b.thread, start, end, summary: '(fallback schedule)', debug: { reason: 'fallback' } };
+      }
+    }
+  } catch {/* ignore */}
 
-// Try to extract a period number from the title (e.g., "1st period", "period 2", "p3")
-  const numMatch = title.match(/\b(?:period\s*)?([1-9])\b/);
-  let thread = null;
-
-  if (numMatch) {
-    thread = 'p' + numMatch[1];  // e.g., "p1"
-  } else {
-    // Fall back to old event_map matching if no number found
-    const matchKey = Object.keys(CFG.event_map).find(k => title.includes(k.toLowerCase()));
-    thread = matchKey ? CFG.event_map[matchKey] : CFG.default_thread;
-  }
-
-  const title = (ev.summary || '').toLowerCase();
-
-  // Matches: "period 1", "1st period", "p3", "period a", "p10"
-  const numMatch = title.match(/\b(?:p(?:eriod)?\s*)?([0-9]{1,2}|[a-z])\b/);
-  let thread = null;
-
-  if (numMatch) {
-    const token = numMatch[1];
-    thread = isNaN(token) ? ('p' + token) : ('p' + parseInt(token,10));
-  } else {
-    const matchKey = Object.keys(CFG.event_map || {}).find(k => title.includes(k.toLowerCase()));
-    thread = matchKey ? CFG.event_map[matchKey] : CFG.default_thread;
-  }
-
-  return { thread, start: ev.dtstart, end: ev.dtend, summary: ev.summary };
-
+  return { thread: null, start: null, end: null, summary: '', debug: { reason: 'none', ...debugInfo } };
 }
+
 
 /* ---------- ICS parsing (robust) ---------- */
 
