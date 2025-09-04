@@ -29,45 +29,64 @@ async function init() {
 async function loop() {
   try {
     clearTimers();
-    const now = localNow(CFG.timezone || 'America/Los_Angeles');
-    $now.textContent = formatNow(now, CFG.timezone);
+    const tz = CFG.timezone || 'America/Los_Angeles';
+    const now = localNow(tz);
+    $now.textContent = formatNow(now, tz);
 
-    // 1) Determine current thread (period) from ICS or fallback
-    const threadInfo = await currentThread(now);
-
-    // 2) Time-remaining override? (clean-up, etc.)
+    const threadInfo = await currentThread(now); // {thread,start,end,summary}
     const minutesLeft = threadInfo.end ? Math.ceil((threadInfo.end - now) / 60000) : null;
-    const tr = pickTimeRemaining(minutesLeft);
-    if (tr) {
-      renderItem(tr);
-      $status.textContent = `Time-remaining (${minutesLeft}m)`;
-      return;
-    }
 
-    // 3) If in-class: show targets for this thread; else show rotation
+    let picked = null;
+    let pickedReason = '';
+
     if (threadInfo.thread) {
-      const item = pickTargets(now, threadInfo.thread);
-      if (item) {
-        renderItem(item);
-        $status.textContent = `In-class • ${threadInfo.thread.toUpperCase()}`;
-        return;
-      }
+      picked = pickTargets(now, threadInfo.thread);
+      pickedReason = picked ? `targets[${threadInfo.thread}]` : 'no targets for thread';
+    }
+    if (!picked) {
+      const tr = pickTimeRemaining(minutesLeft);
+      if (tr) { picked = tr; pickedReason = `timeRemaining (≤ ${minutesLeft}m)`; }
+    }
+    if (!picked) {
+      const rot = pickRotation(now);
+      if (rot) { picked = rot; pickedReason = 'rotation'; }
     }
 
-    const rot = pickRotation(now);
-    if (rot) {
-      renderItem(rot);
-      $status.textContent = `Rotation`;
-      return;
+    if (picked) {
+      renderItem(picked);
+      $status.textContent = pickedReason.includes('targets')
+        ? `In-class • ${threadInfo.thread?.toUpperCase()}`
+        : pickedReason;
+    } else {
+      $content.textContent = 'No content scheduled.';
+      $status.textContent = 'Idle';
     }
 
-    // Nothing matched → friendly idle
-    $content.textContent = 'No content scheduled.';
-    $status.textContent = `Idle`;
+    showDebug({
+      now: formatNow(now, tz),
+      eventSummary: threadInfo.summary || '(none)',
+      start: threadInfo.start ? threadInfo.start.toLocaleString() : null,
+      end: threadInfo.end ? threadInfo.end.toLocaleString() : null,
+      minutesLeft,
+      mappedThread: threadInfo.thread || '(none)',
+      pickedReason,
+      contentType: picked?.type || '(none)',
+      hasDefaults: !!TARGETS?.defaults
+    });
   } catch (e) {
     fail(e);
+    showDebug({ error: e?.message || String(e) });
   }
 }
+
+function showDebug(obj) {
+  if (!new URL(location.href).searchParams.get('debug')) return;
+  let el = document.getElementById('debug');
+  if (!el) { el = document.createElement('div'); el.id = 'debug'; document.body.appendChild(el); }
+  const lines = Object.entries(obj).map(([k,v]) => `<b>${k}:</b> ${typeof v === 'object' ? JSON.stringify(v) : v}`);
+  el.innerHTML = lines.join('\n');
+}
+
 
 /* ---------- Content selection ---------- */
 
