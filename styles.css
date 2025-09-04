@@ -15,3 +15,7 @@ html, body { height:100%; margin:0; background:#0f1115; color:#fff; font-family:
   white-space: pre-wrap; word-break: break-word;
 }
 #debug b { color: #9ef; }
+
+.ics-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.ics-table th, .ics-table td { border: 1px solid #333; padding: 6px 8px; vertical-align: top; }
+.ics-table tr.now { background: rgba(0,255,0,0.12); }
