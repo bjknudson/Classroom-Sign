@@ -145,6 +145,11 @@ function wrapPlaylist(obj) {
 async function currentThread(now) {
   // Try ICS first (via proxy), then fallback schedule
   const icsUrl = CFG.ics_proxy_url || CFG.ics_url;
+  // URL override for testing: ?force=p1 (or p2, etc.)
+  const q = new URL(location.href).searchParams;
+  const force = q.get('force');
+  if (force) return { thread: force, start: null, end: null, summary: '(forced)' };
+
   let ev = null;
   if (icsUrl) {
     try {
@@ -184,60 +189,127 @@ async function currentThread(now) {
     thread = matchKey ? CFG.event_map[matchKey] : CFG.default_thread;
   }
 
+  const title = (ev.summary || '').toLowerCase();
+
+  // Matches: "period 1", "1st period", "p3", "period a", "p10"
+  const numMatch = title.match(/\b(?:p(?:eriod)?\s*)?([0-9]{1,2}|[a-z])\b/);
+  let thread = null;
+
+  if (numMatch) {
+    const token = numMatch[1];
+    thread = isNaN(token) ? ('p' + token) : ('p' + parseInt(token,10));
+  } else {
+    const matchKey = Object.keys(CFG.event_map || {}).find(k => title.includes(k.toLowerCase()));
+    thread = matchKey ? CFG.event_map[matchKey] : CFG.default_thread;
+  }
+
   return { thread, start: ev.dtstart, end: ev.dtend, summary: ev.summary };
 
 }
 
-/* ---------- ICS parsing (minimal) ---------- */
+/* ---------- ICS parsing (robust) ---------- */
 
-function pickCurrentICSEvent(icsText, now, tz) {
-  // Very light ICS parsing sufficient for standard Google public ICS
-  // Assumes DTSTART/DTEND in UTC or TZID; we interpret with local TZ if floating.
-  const events = [];
-  const lines = icsText.split(/\r?\n/);
-  let cur = null;
-  for (let raw of lines) {
-    const line = raw.replace(/\s+$/,'');
-    if (line === 'BEGIN:VEVENT') cur = {};
-    else if (line === 'END:VEVENT') { if (cur) { if (cur.DTSTART && cur.DTEND) events.push(cur); } cur = null; }
-    else if (cur) {
-      if (line.startsWith('SUMMARY:')) cur.summary = line.slice(8);
-      else if (line.startsWith('DTSTART')) cur.DTSTART = parseICSDate(line);
-      else if (line.startsWith('DTEND'))   cur.DTEND   = parseICSDate(line);
+function unfoldICS(text) {
+  const raw = text.replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  for (let i = 0; i < raw.length; i++) {
+    const line = raw[i];
+    if (line.startsWith(' ') && out.length) {
+      out[out.length - 1] += line.slice(1);
+    } else {
+      out.push(line);
     }
   }
-  // Find event containing "now"
+  return out;
+}
+
+function parseICSParamsAndValue(line) {
+  const idx = line.indexOf(':');
+  if (idx === -1) return { name: line, params: {}, value: '' };
+  const left = line.slice(0, idx);
+  const value = line.slice(idx + 1);
+  const parts = left.split(';');
+  const name = parts[0];
+  const params = {};
+  for (let i = 1; i < parts.length; i++) {
+    const [k, v] = parts[i].split('=');
+    params[(k || '').toUpperCase()] = v;
+  }
+  return { name, params, value };
+}
+
+function parseICSEvents(icsText) {
+  const lines = unfoldICS(icsText);
+  const events = [];
+  let cur = null;
+
+  for (const line of lines) {
+    if (line === 'BEGIN:VEVENT') {
+      cur = {};
+    } else if (line === 'END:VEVENT') {
+      if (cur && (cur.DTSTART || cur.DTEND)) events.push(cur);
+      cur = null;
+    } else if (cur) {
+      if (line.startsWith('SUMMARY:')) cur.SUMMARY = line.slice(8);
+      else if (line.startsWith('DTSTART')) {
+        const { params, value } = parseICSParamsAndValue(line);
+        cur.DTSTART = value;
+        cur.DTSTART_TZID = params.TZID || null;
+        cur.DTSTART_VALUE = params.VALUE || null; // e.g., DATE
+      } else if (line.startsWith('DTEND')) {
+        const { params, value } = parseICSParamsAndValue(line);
+        cur.DTEND = value;
+        cur.DTEND_TZID = params.TZID || null;
+        cur.DTEND_VALUE = params.VALUE || null;
+      }
+    }
+  }
+  return events;
+}
+
+function parseICSDateValue(val, tzid, displayTZ) {
+  if (!val) return null;
+
+  // All-day VALUE=DATE: "YYYYMMDD"
+  if (/^\d{8}$/.test(val)) {
+    const y = +val.slice(0,4), m = +val.slice(4,6)-1, d = +val.slice(6,8);
+    const asTZ = new Date(new Date(Date.UTC(y, m, d, 0, 0, 0))
+      .toLocaleString('en-US', { timeZone: displayTZ || 'America/Los_Angeles' }));
+    return asTZ;
+  }
+
+  // UTC instant
+  if (val.endsWith('Z')) return new Date(val);
+
+  // Floating or TZID local: "YYYYMMDDTHHMMSS"
+  const y = +val.slice(0,4), m = +val.slice(4,6)-1, d = +val.slice(6,8),
+        H = +val.slice(9,11) || 0, M = +val.slice(11,13) || 0, S = +val.slice(13,15) || 0;
+  const base = new Date(Date.UTC(y, m, d, H, M, S));
+  const tz = tzid || displayTZ || 'America/Los_Angeles';
+  const asTZ = new Date(new Date(base).toLocaleString('en-US', { timeZone: tz }));
+  return asTZ;
+}
+
+function pickCurrentICSEvent(icsText, now, displayTZ) {
+  const events = parseICSEvents(icsText);
   for (const e of events) {
-    const {start, end} = normalizeICSTimes(e, tz);
-    if (now >= start && now < end) {
-      return { summary: e.summary, dtstart: start, dtend: end };
+    const start = parseICSDateValue(e.DTSTART, e.DTSTART_TZID, displayTZ);
+    let end = parseICSDateValue(e.DTEND, e.DTEND_TZID, displayTZ);
+
+    // If all-day DTSTART with no DTEND, treat as end of day
+    if (e.DTSTART_VALUE === 'DATE' && (!e.DTEND || e.DTEND_VALUE === 'DATE')) {
+      const endOfDay = new Date(start);
+      endOfDay.setHours(23, 59, 59, 999);
+      end = end || endOfDay;
+    }
+
+    if (start && end && now >= start && now < end) {
+      return { summary: e.SUMMARY || '', dtstart: start, dtend: end };
     }
   }
   return null;
 }
 
-function parseICSDate(line) {
-  // e.g., "DTSTART:20250903T160000Z" or "DTSTART;TZID=America/Los_Angeles:20250903T090000"
-  const [, val] = line.split(':');
-  // Return raw string; interpret later
-  return val;
-}
-
-function normalizeICSTimes(e, tz) {
-  const start = icsToDate(e.DTSTART, tz);
-  const end   = icsToDate(e.DTEND, tz);
-  return { start, end };
-}
-
-function icsToDate(s, tz) {
-  // Zulu → UTC; floating or TZID → construct in that TZ via toLocaleString hack
-  if (s.endsWith('Z')) return new Date(s);
-  // "YYYYMMDDTHHMMSS" floating in calendar TZ: treat as given TZ
-  const y = +s.slice(0,4), m = +s.slice(4,6)-1, d = +s.slice(6,8), H = +s.slice(9,11), M = +s.slice(11,13), S = +s.slice(13,15);
-  const fake = new Date(Date.UTC(y, m, d, H, M, S || 0));
-  const asTZ = new Date(new Date(fake).toLocaleString('en-US', { timeZone: tz || 'America/Los_Angeles' }));
-  return asTZ;
-}
 
 /* ---------- Utils ---------- */
 
