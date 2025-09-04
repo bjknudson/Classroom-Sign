@@ -1,0 +1,26 @@
+{
+  "defaults": {
+    "p1": { "type": "text", "content": "P1: Update defaults if the day entry is missing." },
+    "p2": { "type": "text", "content": "P2 default targets..." }
+  },
+  "byDate": {
+    "2025-09-03": {
+      "p1": {
+        "type": "text",
+        "content": "Design Thinking: Empathize interviews today. Success: 3 clear insights."
+      },
+      "p2": {
+        "type": "slides",
+        "url": "https://docs.google.com/presentation/d/e/.../pub?start=false&loop=false&delayms=3000"
+      },
+      "p3": {
+        "type": "images",
+        "durationSec": 12,
+        "items": [
+          {"src": "https://yourcdn/img/safety_goggles.png", "caption": "Goggles required."},
+          {"src": "https://yourcdn/img/soldering_tips.png", "caption": "Tin both sides first."}
+        ]
+      }
+    }
+  }
+}
