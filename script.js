@@ -63,16 +63,16 @@ async function loop() {
     }
 
     showDebug({
-      now: formatNow(now, tz),
-      eventSummary: threadInfo.summary || '(none)',
-      start: threadInfo.start ? threadInfo.start.toLocaleString() : null,
-      end: threadInfo.end ? threadInfo.end.toLocaleString() : null,
-      minutesLeft,
-      mappedThread: threadInfo.thread || '(none)',
-      pickedReason,
-      contentType: picked?.type || '(none)',
-      hasDefaults: !!TARGETS?.defaults
+    now: formatNow(now, tz),
+    eventSummary: threadInfo.summary || '(none)',
+    mappedThread: threadInfo.thread || '(none)',
+    start: threadInfo.start ? threadInfo.start.toString() : null,
+    end: threadInfo.end ? threadInfo.end.toString() : null,
+    reason: threadInfo.debug?.reason || '(n/a)',
+    lookedAt: threadInfo.debug?.lookedAt || [],
+    nextEvent: threadInfo.debug?.nextEvent || null
     });
+
   } catch (e) {
     fail(e);
     showDebug({ error: e?.message || String(e) });
