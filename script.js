@@ -33,6 +33,13 @@ async function loop() {
     const now = localNow(tz);
     $now.textContent = formatNow(now, tz);
 
+    const query = new URL(location.href).searchParams;
+    if (query.get('inspect') === '1') {
+      await inspectICS(now);
+      return;
+    }
+
+
     const threadInfo = await currentThread(now); // {thread,start,end,summary}
     const minutesLeft = threadInfo.end ? Math.ceil((threadInfo.end - now) / 60000) : null;
 
