@@ -4,7 +4,13 @@
     {"start": "09:00", "end": "09:55", "thread": "p2"}
   ],
   "Tue": [],
-  "Wed": [],
-  "Thu": [],
+  "Wed": [
+    {"start": "08:00", "end": "08:55", "thread": "p1"},
+    {"start": "23:00", "end": "23:55", "thread": "p2"}
+  ],
+  "Thu": [
+    {"start": "08:00", "end": "08:55", "thread": "p1"},
+    {"start": "23:00", "end": "23:55", "thread": "p2"}
+  ],
   "Fri": []
 }
