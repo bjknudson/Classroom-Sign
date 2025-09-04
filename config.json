@@ -1,0 +1,19 @@
+{
+  "timezone": "America/Los_Angeles",
+  "ics_url": "https://calendar.google.com/calendar/ical/your_public_calendar_id/basic.ics",
+  "ics_proxy_url": "https://your-worker.example.workers.dev/ics", 
+  "event_map": {
+    "1st period": "p1",
+    "1st period (block)": "p1",
+    "1st period minimum day": "p1",
+    "2nd period": "p2",
+    "2nd period (rally)": "p2",
+    "3rd period": "p3",
+    "4th period": "p4",
+    "5th period": "p5",
+    "6th period": "p6",
+    "7th period": "p7"
+  },
+  "default_thread": "p1",
+  "refresh_seconds": 60
+}
