@@ -10,17 +10,21 @@ init();
 
 async function init() {
   try {
-    [CFG, TARGETS, ANNC] = await Promise.all([
-      fetchJSON('config.json'),
-      fetchJSON('targets.json'),
-      fetchJSON('announcements.json')
+    // Load configs, but don't crash if one is missing.
+    const [cfg, targets, annc] = await Promise.all([
+      fetchJSON('config.json').catch(e => ({ timezone: 'America/Los_Angeles', refresh_seconds: 60 })),
+      fetchJSON('targets.json').catch(e => ({ defaults: {} , byDate: {} })),
+      fetchJSON('announcements.json').catch(e => ({ rotation: [], timeRemaining: [] }))
     ]);
+    CFG = cfg; TARGETS = targets; ANNC = annc;
+
     loop();
     setInterval(loop, (CFG.refresh_seconds || 60) * 1000);
   } catch (e) {
     fail(e);
   }
 }
+
 
 async function loop() {
   try {
