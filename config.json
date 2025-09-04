@@ -3,7 +3,7 @@
   "ics_url": "https://calendar.google.com/calendar/ical/c_9f4dea8c0dd86e0300ef20ae2ed529912a38471e19c61f8582a669c1f44c7d1c%40group.calendar.google.com/public/basic.ics",
   "ics_proxy_url": "https://sweet-wind-c900.bknudson.workers.dev/ics", 
   "event_map": {
-    "1st period": "p1",
+    "1st Period": "p1",
     "1st period (block)": "p1",
     "1st period minimum day": "p1",
     "2nd period": "p2",
