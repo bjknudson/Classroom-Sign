@@ -5,9 +5,7 @@
   },
   "byDate": {
     "2025-09-04": {
-      "p1": {
-        "type": "text",
-        "content": "Design Thinking: Empathize interviews today. Success: 3 clear insights."
+      "p1": { "type": "text", "content": "P1 today — Empathize interviews, 3 insights." 
       },
       "p3": {
         "type": "slides",
