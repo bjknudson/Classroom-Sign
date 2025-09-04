@@ -336,6 +336,81 @@ function pickCurrentICSEvent(icsText, now, displayTZ) {
   return null;
 }
 
+async function inspectICS(now) {
+  const tz = CFG.timezone || 'America/Los_Angeles';
+  const icsList = Array.isArray(CFG.ics_urls)
+    ? CFG.ics_urls
+    : (CFG.ics_proxy_url || CFG.ics_url ? [CFG.ics_proxy_url || CFG.ics_url] : []);
+
+  const wrap = el('div');
+  wrap.appendChild(el('h2', {text: 'ICS Inspector'}));
+
+  if (!icsList.length) {
+    wrap.appendChild(el('p', {text: 'No ICS URL configured (ics_proxy_url or ics_urls).'}));
+  }
+
+  for (const url of icsList) {
+    const section = el('div', {class: 'ics-section'}, [
+      el('h3', {text: `Feed: ${url}`})
+    ]);
+    try {
+      const icsText = await fetchText(icsUrlWithCacheBust(url));
+      const eventsRaw = parseICSEvents(icsText);
+      const events = eventsRaw.map(e => {
+        const start = parseICSDateValue(e.DTSTART, e.DTSTART_TZID, tz);
+        const end   = parseICSDateValue(e.DTEND,   e.DTEND_TZID,   tz);
+        return { summary: e.SUMMARY || '', start, end };
+      }).filter(e => e.start && e.end)
+        .sort((a,b) => a.start - b.start);
+
+      section.appendChild(el('p', {text: `Parsed events: ${events.length}`}));
+
+      const table = el('table', {class: 'ics-table'});
+      const thead = el('thead', {}, [ el('tr', {}, [
+        el('th', {text: 'Contains Now?'}), el('th', {text: 'Start'}), el('th', {text: 'End'}), el('th', {text: 'Summary'}), el('th', {text: 'Thread?'}),
+      ])]);
+      table.appendChild(thead);
+      const tbody = el('tbody');
+
+      const LIMIT = 40;
+      let count = 0;
+      for (const ev of events) {
+        if (count++ >= LIMIT) break;
+        const contains = (now >= ev.start && now < ev.end);
+        const title = (ev.summary || '').toLowerCase();
+        const m = title.match(/\b(?:p(?:eriod)?\s*)?([0-9]{1,2}|[a-z])\b/);
+        let thread = '(n/a)';
+        if (m) {
+          const token = m[1];
+          thread = isNaN(token) ? ('p' + token) : ('p' + parseInt(token,10));
+        } else if (CFG.event_map) {
+          const key = Object.keys(CFG.event_map).find(k => title.includes(k.toLowerCase()));
+          if (key) thread = CFG.event_map[key];
+        }
+
+        const row = el('tr', {class: contains ? 'now' : ''}, [
+          el('td', {text: contains ? 'YES' : ''}),
+          el('td', {text: ev.start.toString()}),
+          el('td', {text: ev.end.toString()}),
+          el('td', {text: ev.summary}),
+          el('td', {text: thread})
+        ]);
+        tbody.appendChild(row);
+      }
+      table.appendChild(tbody);
+      section.appendChild(table);
+    } catch (err) {
+      section.appendChild(el('p', {text: `Error: ${err.message}`}));
+    }
+    wrap.appendChild(section);
+  }
+
+  // Render into page
+  $content.innerHTML = '';
+  $content.appendChild(wrap);
+  $status.textContent = 'Inspector';
+}
+
 
 /* ---------- Utils ---------- */
 
@@ -352,6 +427,16 @@ function blockToDates(base, startHHMM, endHHMM) {
   end.setHours(+endHHMM.slice(0,2), +endHHMM.slice(3), 0, 0);
   return { start, end };
 }
+
+function el(tag, attrs = {}, children = []) {
+  const n = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k === 'class') n.className = v; else if (k === 'text') n.textContent = v; else n.setAttribute(k, v);
+  }
+  for (const c of [].concat(children)) n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  return n;
+}
+
 
 async function fetchJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.json(); }
 async function fetchText(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.text(); }
