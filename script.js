@@ -148,9 +148,21 @@ async function currentThread(now) {
   if (!ev) return { thread: null, start: null, end: null };
 
   const title = (ev.summary || '').toLowerCase();
-  const matchKey = Object.keys(CFG.event_map).find(k => title.includes(k.toLowerCase()));
-  const thread = matchKey ? CFG.event_map[matchKey] : CFG.default_thread;
-  return { thread, start: ev.dtstart, end: ev.dtend };
+
+// Try to extract a period number from the title (e.g., "1st period", "period 2", "p3")
+  const numMatch = title.match(/\b(?:period\s*)?([1-9])\b/);
+  let thread = null;
+
+  if (numMatch) {
+    thread = 'p' + numMatch[1];  // e.g., "p1"
+  } else {
+    // Fall back to old event_map matching if no number found
+    const matchKey = Object.keys(CFG.event_map).find(k => title.includes(k.toLowerCase()));
+    thread = matchKey ? CFG.event_map[matchKey] : CFG.default_thread;
+  }
+
+  return { thread, start: ev.dtstart, end: ev.dtend, summary: ev.summary };
+
 }
 
 /* ---------- ICS parsing (minimal) ---------- */
