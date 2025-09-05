@@ -171,16 +171,46 @@ function renderItem(item) {
   }
 }
 
-function renderImages(item) {
+async function renderImages(item) {
+  clearTimers();
+
+  // Case A: explicit list in JSON
+  if (item.items) {
+    cycleImages(item.items.map(it => it.src), item.durationSec);
+    return;
+  }
+
+  // Case B: folder with manifest.json
+  if (item.folder) {
+    try {
+      const res = await fetch(`${item.folder}/manifest.json`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`manifest.json missing in ${item.folder}`);
+      const list = await res.json();
+
+      if (!Array.isArray(list) || list.length === 0) {
+        throw new Error(`manifest.json in ${item.folder} is empty or invalid`);
+      }
+
+      const urls = list.map(f => `${item.folder}/${f}`);
+      cycleImages(urls, item.durationSec);
+    } catch (err) {
+      $content.textContent = `Error loading images: ${err.message}`;
+      console.error(err);
+    }
+  }
+}
+
+function cycleImages(urls, durationSec) {
   let i = 0;
   const show = () => {
-    const it = item.items[i % item.items.length];
-    $content.innerHTML = `<img src="${it.src}" alt="image"/>${it.caption ? `<div class="caption">${escapeHTML(it.caption)}</div>` : ''}`;
+    const src = urls[i % urls.length];
+    $content.innerHTML = `<img src="${src}" alt="image" style="max-width:100%;height:auto;">`;
     i++;
   };
   show();
-  slideTimer = setInterval(show, (item.durationSec || 10) * 1000);
+  slideTimer = setInterval(show, (durationSec || 10) * 1000);
 }
+
 
 function wrapPlaylist(obj) {
   // shallow clone to avoid mutating originals
