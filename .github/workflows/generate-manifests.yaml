@@ -5,6 +5,9 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+permissions:
+  contents: write   # allow commit/push
+
 jobs:
   build:
     runs-on: ubuntu-latest
