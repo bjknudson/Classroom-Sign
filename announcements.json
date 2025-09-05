@@ -1,28 +1,18 @@
 {
   "rotation": [
     {
+      "window": { "start": "11:30", "end": "12:00" },
       "type": "images",
-      "durationSec": 10,
-      "items": [
-        {"src": "https://yourcdn/img/club_meeting_today.png"},
-        {"src": "https://yourcdn/img/maker_fair_friday.png"}
-      ],
-      "window": { "start": "07:30", "end": "08:10" }  // only before school
-    },
-    {
-      "type": "slides",
-      "url": "https://docs.google.com/presentation/d/e/.../pub?start=true&loop=true&delayms=5000",
-      "window": { "start": "12:00", "end": "12:40" }  // lunch loop
+      "folder": "assets/slides/annoucements",
+      "durationSec": 8
     }
   ],
   "timeRemaining": [
     {
       "minutesLeft": 5,
       "type": "images",
-      "durationSec": 8,
-      "items": [
-        {"src": "https://yourcdn/img/clean_up.png", "caption": "5 minutes left — clean-up checklist"}
-      ]
+      "folder": "assets/slides/cleanup",
+      "durationSec": 6
     }
   ]
 }
