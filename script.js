@@ -123,15 +123,48 @@ function renderItem(item) {
   if (item.type === 'text') {
     $content.innerHTML = escapeHTML(item.content).replace(/\n/g, '<br/>');
   } else if (item.type === 'slides') {
-    $content.innerHTML = `
-      <iframe class="slides-embed"
-        src="${item.url}"
-        allow="fullscreen"
-        referrerpolicy="no-referrer-when-downgrade"
-        loading="lazy">
-      </iframe>`;
+      // Try iframe first
+      const iframe = document.createElement('iframe');
+      iframe.className = 'slides-embed';
+      iframe.src = item.url;
+      iframe.allow = "fullscreen";
+      iframe.loading = "lazy";
+    
+      let loaded = false;
+      iframe.onload = () => { loaded = true; };
+      $content.innerHTML = '';
+      $content.appendChild(iframe);
+    
+      // Fallback to images: scrape published deck for slide IDs
+      setTimeout(async () => {
+        if (!loaded) {
+          try {
+            const res = await fetch(item.url, { cache: 'no-store' });
+            const html = await res.text();
 
-  } else if (item.type === 'images') {
+            // Find all "slide=id.gXXXX" occurrences
+            const matches = [...html.matchAll(/slide=id\.(g[a-zA-Z0-9]+)/g)];
+            const uniqueIds = [...new Set(matches.map(m => m[1]))];
+    
+            if (uniqueIds.length) {
+              let i = 0;
+              const show = () => {
+                const src = `${item.url.replace(/\/pub.*/, '')}/pub?slide=id.${uniqueIds[i % uniqueIds.length]}`;
+                $content.innerHTML = `<img src="${src}" alt="slide image" style="max-width:100%;height:auto;">`;
+                i++;
+              };
+              show();
+              slideTimer = setInterval(show, (item.durationSec || 10) * 1000);
+            } else {
+              $content.textContent = "No slides found in deck.";
+            }
+          } catch (err) {
+            $content.textContent = "Error loading slides fallback.";
+            console.error("Slides fallback error", err);
+          }
+        }
+      }, 5000);
+} else if (item.type === 'images') {
     renderImages(item);
   } else {
     $content.textContent = 'Unsupported item type.';
