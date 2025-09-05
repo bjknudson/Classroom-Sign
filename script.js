@@ -174,13 +174,13 @@ function renderItem(item) {
 async function renderImages(item) {
   clearTimers();
 
-  // Case A: explicit list in JSON
-  if (item.items) {
+  // Case A: explicit list of items in JSON
+  if (Array.isArray(item.items) && item.items.length) {
     cycleImages(item.items.map(it => it.src), item.durationSec);
     return;
   }
 
-  // Case B: folder with manifest.json
+  // Case B: folder points to images + manifest.json
   if (item.folder) {
     try {
       const res = await fetch(`${item.folder}/manifest.json`, { cache: 'no-store' });
@@ -193,11 +193,16 @@ async function renderImages(item) {
 
       const urls = list.map(f => `${item.folder}/${f}`);
       cycleImages(urls, item.durationSec);
+      return;
     } catch (err) {
       $content.textContent = `Error loading images: ${err.message}`;
       console.error(err);
+      return;
     }
   }
+
+  // Nothing valid
+  $content.textContent = "No images configured.";
 }
 
 function cycleImages(urls, durationSec) {
