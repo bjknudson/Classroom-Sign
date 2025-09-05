@@ -6,7 +6,10 @@
     "p4": { "type": "text", "content": "4th Period" },
     "p5": { "type": "text", "content": "5th Period" },
     "p6": { "type": "text", "content": "6th Period" },
-    "p7": { "type": "text", "content": "7th Period" }
+    "p7": {
+        "type": "slides",
+        "url": "https://docs.google.com/presentation/d/1a-2Cv9Cu8iqrZybLJqmzNVt9Gxl1Vh48K9x2WCOwXW4/pub?start=false&loop=false&delayms=3000"
+      }
   },
   "byDate": {
     "2025-09-04": {
