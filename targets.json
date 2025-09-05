@@ -6,7 +6,7 @@
     "p4": { "type": "text", "content": "4th Period" },
     "p5": { "type": "text", "content": "5th Period" },
     "p6": { "type": "text", "content": "6th Period" },
-    "p6": { "type": "text", "content": "7th Period" }
+    "p7": { "type": "text", "content": "7th Period" }
   },
   "byDate": {
     "2025-09-04": {
