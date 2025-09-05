@@ -123,7 +123,14 @@ function renderItem(item) {
   if (item.type === 'text') {
     $content.innerHTML = escapeHTML(item.content).replace(/\n/g, '<br/>');
   } else if (item.type === 'slides') {
-    $content.innerHTML = `<iframe class="slides-embed" src="${item.url}" allowfullscreen></iframe>`;
+    $content.innerHTML = `
+      <iframe class="slides-embed"
+        src="${item.url}"
+        allow="fullscreen"
+        referrerpolicy="no-referrer-when-downgrade"
+        loading="lazy">
+      </iframe>`;
+
   } else if (item.type === 'images') {
     renderImages(item);
   } else {
