@@ -1,0 +1,49 @@
+name: Generate Manifests
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate manifest.json files
+        run: |
+          echo "Generating manifest.json files..."
+          for dir in assets/slides/*/ ; do
+            files=$(ls "$dir" | grep -E '\.(png|jpg|jpeg|gif|webp)$' | sort)
+            if [ -n "$files" ]; then
+              (
+                cd "$dir"
+                printf "[\n" > manifest.json
+                count=$(echo "$files" | wc -l)
+                i=1
+                for f in $files; do
+                  if [ $i -lt $count ]; then
+                    printf "  \"%s\",\n" "$f" >> manifest.json
+                  else
+                    printf "  \"%s\"\n" "$f" >> manifest.json
+                  fi
+                  i=$((i+1))
+                done
+                printf "]\n" >> manifest.json
+              )
+            fi
+          done
+
+      - name: Commit manifests
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add assets/slides/*/manifest.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Auto-update manifest.json files"
+            git push
+          else
+            echo "No manifest changes."
+          fi
