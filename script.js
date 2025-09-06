@@ -65,7 +65,7 @@ async function loop() {
         ? `In-class • ${threadInfo.thread?.toUpperCase()}`
         : pickedReason;
     } else {
-      $content.textContent = 'No content scheduled.';
+      $content.textContent = 'No Learning Targets scheduled for the current Period.';
       $status.textContent = 'Idle';
     }
 
