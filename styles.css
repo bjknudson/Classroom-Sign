@@ -6,9 +6,7 @@ html, body { height:100%; margin:0; background:#0f1115; color:#fff; font-family:
 #content img { max-width:100%; height:auto; display:block; margin:0.5rem auto; }
 #content .caption { font-size:0.6em; opacity:0.8; text-align:center; margin-top:0.3em; }
 .slides-embed, iframe { width:100%; height:68vh; border:0; border-radius:12px; }
-.tz {
-  display: none;
-}
+
 
 #debug {
   position: fixed; right: 8px; bottom: 8px; z-index: 9999;
