@@ -31,7 +31,7 @@ async function loop() {
     clearTimers();
     const tz = CFG.timezone || 'America/Los_Angeles';
     const now = localNow(tz);
-    $now.innerHTML = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} <span class="tz">(${tz})</span>`;
+    $now.textContent = formatNow(now, tz);
 
     const query = new URL(location.href).searchParams;
     if (query.get('inspect') === '1') {
