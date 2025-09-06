@@ -26,7 +26,7 @@
     {"start": "11:30", "end": "12:25", "thread": "p4"},
     {"start": "13:05", "end": "13:55", "thread": "p5"},
     {"start": "14:05", "end": "14:55", "thread": "p6"},
-    {"start": "15:05", "end": "23:55", "thread": "p7"}  #testing values
+    {"start": "15:05", "end": "15:55", "thread": "p7"} 
   ],
   "Fri": [
     {"start": "08:30", "end": "09:20", "thread": "p1"},
@@ -35,6 +35,6 @@
     {"start": "11:30", "end": "12:25", "thread": "p4"},
     {"start": "13:05", "end": "13:55", "thread": "p5"},
     {"start": "14:05", "end": "14:55", "thread": "p6"}, 
-    {"start": "15:05", "end": "20:55", "thread": "p7"} #####testing values
+    {"start": "15:05", "end": "15:55", "thread": "p7"} 
   ]
 }
