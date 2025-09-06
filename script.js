@@ -1,4 +1,4 @@
-const $content = document.getElementById('content');
+fconst $content = document.getElementById('content');
 const $status  = document.getElementById('status');
 const $now     = document.getElementById('now');
 
@@ -523,7 +523,7 @@ function el(tag, attrs = {}, children = []) {
 async function fetchJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.json(); }
 async function fetchText(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.text(); }
 function icsUrlWithCacheBust(url){ const u=new URL(url); u.searchParams.set('t', Date.now()); return u.toString(); }
-function formatNow(d, tz){ return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} ${tz ? '('+tz+')' : ''}`; }
+function formatNow(d, tz) {  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`;}
 function escapeHTML(s){ return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function clearTimers(){ if (ticker) { clearInterval(ticker); ticker=null; } if (slideTimer){ clearInterval(slideTimer); slideTimer=null; } }
 function fail(e){ $content.textContent='Error loading display.'; $status.textContent = (e && e.message) ? e.message : 'Unknown error'; }
