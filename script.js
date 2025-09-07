@@ -9,6 +9,12 @@ let slideTimer = null;
 init();
 
 async function init() {
+    // TEMP TEST: render something no matter what (remove after debugging)
+  if (new URL(location.href).searchParams.get('safe') === '1') {
+    $content.innerHTML = 'Temporary Safe Mode — P1 default text works.';
+    $status.textContent = 'Safe mode (bypassing config/ICS)';
+    return; // skip the rest of init()
+  }
   try {
     // Load configs, but don't crash if one is missing.
     const [cfg, targets, annc] = await Promise.all([
