@@ -14,5 +14,6 @@
     "7th Period": "p7"
   },
   "default_thread": "p1",
-  "refresh_seconds": 60
+  "refresh_seconds": 60,
+  "hard_reload_minutes": 180
 }
