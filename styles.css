@@ -1,13 +1,90 @@
-html, body { height:100%; margin:0; background:#0f1115; color:#fff; font-family:system-ui, sans-serif; }
+/* === Global tuning === */
+:root {
+  --scale: 1;                /* master size knob (1 = normal) */
+  --maxw: 1000px;            /* line length target */
+  --pad: 2.2rem;             /* content padding */
+  --fg: #ffffff;
+  --fg-dim: #cfd8dc;
+  --bg: #0f1115;
+  --accent: #9AE6B4;
+}
+
+/* optional: boost all sizes at once by adding .far to <body> */
+body.far { --scale: 1.25; }      /* try 1.25 or 1.4 for the back row */
+
+/* Optional media: on very large screens, scale up a bit */
+@media (min-width: 1400px) {
+  :root { --scale: 1.1; }
+}
+
+html, body {
+  height:100%; margin:0;
+  background: var(--bg); color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+
 #app { display:flex; flex-direction:column; height:100%; }
-#bar { display:flex; justify-content:space-between; gap:1rem; padding:0.5rem 1rem; font-size:0.95rem; opacity:0.8; }
-#stage { flex:1; display:flex; align-items:center; justify-content:center; }
-#content { width:min(1200px, 92vw); padding:2rem; font-size:clamp(22px, 3.0vw, 46px); line-height:1.25; }
-#content img { max-width:100%; height:auto; display:block; margin:0.5rem auto; }
-#content .caption { font-size:0.6em; opacity:0.8; text-align:center; margin-top:0.3em; }
-.slides-embed, iframe { width:100%; height:68vh; border:0; border-radius:12px; }
 
+/* Top bar: slightly bigger, clearer */
+#bar {
+  display:flex; justify-content:space-between; gap:1rem;
+  padding:0.6rem 1.2rem; font-size:calc(0.95rem * var(--scale));
+  color: var(--fg-dim);
+}
 
+/* Stage keeps content centered with safe-area padding for overscan TVs */
+#stage { flex:1; display:flex; align-items:center; justify-content:center; padding: 2vmin; }
+
+#content {
+  width:min(var(--maxw), 92vw);
+  padding: calc(var(--pad) * var(--scale));
+  /* Base size uses viewport + scale; clamp keeps it sane */
+  font-size: clamp(22px, calc(3.0vw * var(--scale)), 50px);
+  line-height: 1.33;
+}
+
+/* Headings: clearly larger, with spacing */
+#content h1 { font-size: 1.25em; margin: 0 0 0.4em; }
+#content h2 { font-size: 1.10em; margin: 0.2em 0 0.35em; }
+
+/* Emphasis color is readable */
+#content strong, #content b { color: var(--accent); font-weight: 800; }
+
+/* Lists: more breathing room + larger bullets alignment */
+#content ul, #content ol { margin: 0.4em 0 0.6em 1.1em; }
+#content li { margin: 0.25em 0; }
+
+/* Images: full width with soft edges; captions bigger */
+#content img {
+  max-width:100%; height:auto; display:block;
+  margin:0.6rem auto; border-radius: 10px;
+}
+#content .caption {
+  font-size: 0.75em; opacity: 0.9; text-align:center; margin-top:0.35em;
+}
+
+/* Slides iframe: taller for readability */
+.slides-embed, iframe {
+  width:100%; height:72vh; border:0; border-radius:12px;
+}
+
+/* Subtle outline on all text to survive busy images (4-way shadow) */
+#content, #content *:not(img):not(iframe) {
+  text-shadow:
+    0 1px 2px rgba(0,0,0,.55),
+    0 -1px 2px rgba(0,0,0,.35),
+    1px 0 2px rgba(0,0,0,.35),
+    -1px 0 2px rgba(0,0,0,.35);
+}
+
+/* Optional: backdrop for text when images are very bright */
+.has-backdrop #content {
+  background: rgba(0,0,0,0.35);
+  border-radius: 14px;
+}
+
+/* Debug/inspector (kept from yours) */
 #debug {
   position: fixed; right: 8px; bottom: 8px; z-index: 9999;
   background: rgba(0,0,0,.7); color: #0f0;
@@ -19,4 +96,8 @@ html, body { height:100%; margin:0; background:#0f1115; color:#fff; font-family:
 
 .ics-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .ics-table th, .ics-table td { border: 1px solid #333; padding: 6px 8px; vertical-align: top; }
-.ics-table tr.now { background: rgba(0,255,0,0.12); }
+
+/* Accessibility niceties */
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
