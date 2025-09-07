@@ -25,6 +25,34 @@ let CFG, TARGETS, ANNC;
 let ticker = null;
 let slideTimer = null;
 
+// Periodic hard reload to keep kiosk healthy
+(function setupHardReload(){
+  let armed = false;
+  window.addEventListener('load', () => {
+    if (!CFG || !CFG.hard_reload_minutes) return;
+    const jitter = Math.floor(Math.random()*60); // avoid all screens reloading at the same second
+    const intervalMs = (CFG.hard_reload_minutes*60 + jitter) * 1000;
+    setInterval(() => {
+      // Only reload if page is visible and online
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        location.reload();
+      }
+    }, intervalMs);
+  });
+})();
+
+// Reload when network returns (helps after Wi-Fi blips)
+window.addEventListener('online', () => setTimeout(()=>location.reload(), 3000));
+
+// If the tab ever gets hidden and comes back (e.g., HDMI sync), refresh content
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    // trigger an immediate loop pass
+    if (typeof loop === 'function') loop();
+  }
+});
+
+
 init();
 
 async function init() {
