@@ -1,4 +1,4 @@
-fconst $content = document.getElementById('content');
+const $content = document.getElementById('content');
 const $status  = document.getElementById('status');
 const $now     = document.getElementById('now');
 
@@ -9,12 +9,6 @@ let slideTimer = null;
 init();
 
 async function init() {
-    // TEMP TEST: render something no matter what (remove after debugging)
-  if (new URL(location.href).searchParams.get('safe') === '1') {
-    $content.innerHTML = 'Temporary Safe Mode — P1 default text works.';
-    $status.textContent = 'Safe mode (bypassing config/ICS)';
-    return; // skip the rest of init()
-  }
   try {
     // Load configs, but don't crash if one is missing.
     const [cfg, targets, annc] = await Promise.all([
@@ -71,7 +65,7 @@ async function loop() {
         ? `In-class • ${threadInfo.thread?.toUpperCase()}`
         : pickedReason;
     } else {
-      $content.textContent = 'No Learning Targets scheduled for the current Period.';
+      $content.textContent = 'No content scheduled.';
       $status.textContent = 'Idle';
     }
 
@@ -180,13 +174,13 @@ function renderItem(item) {
 async function renderImages(item) {
   clearTimers();
 
-  // Case A: explicit list of items in JSON
-  if (Array.isArray(item.items) && item.items.length) {
+  // Case A: explicit list in JSON
+  if (item.items) {
     cycleImages(item.items.map(it => it.src), item.durationSec);
     return;
   }
 
-  // Case B: folder points to images + manifest.json
+  // Case B: folder with manifest.json
   if (item.folder) {
     try {
       const res = await fetch(`${item.folder}/manifest.json`, { cache: 'no-store' });
@@ -199,16 +193,11 @@ async function renderImages(item) {
 
       const urls = list.map(f => `${item.folder}/${f}`);
       cycleImages(urls, item.durationSec);
-      return;
     } catch (err) {
       $content.textContent = `Error loading images: ${err.message}`;
       console.error(err);
-      return;
     }
   }
-
-  // Nothing valid
-  $content.textContent = "No images configured.";
 }
 
 function cycleImages(urls, durationSec) {
