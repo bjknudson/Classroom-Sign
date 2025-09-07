@@ -1,3 +1,22 @@
+// ===== MOBILE-FRIENDLY ERROR TRAP =====
+(function () {
+  function showFatal(msg, stack) {
+    const box = document.createElement('div');
+    box.id = 'fatal';
+    box.style.cssText = 'position:fixed;inset:auto 8px 8px 8px;background:#220;'+
+      'color:#f99;font:12px/1.4 ui-monospace,monospace;padding:10px;border:1px solid #844;'+
+      'border-radius:8px;z-index:99999;max-height:45vh;overflow:auto;white-space:pre-wrap;';
+    box.innerText = `⚠️ Script error\n${msg || '(no message)'}${stack ? '\n\n'+stack : ''}`;
+    document.body.appendChild(box);
+  }
+  window.addEventListener('error', (e)=> showFatal(e.message, e.error && e.error.stack));
+  window.addEventListener('unhandledrejection', (e)=> {
+    const why = (e && e.reason) ? (e.reason.stack || e.reason.message || String(e.reason)) : 'Promise rejection';
+    showFatal(why);
+  });
+})();
+
+
 const $content = document.getElementById('content');
 const $status  = document.getElementById('status');
 const $now     = document.getElementById('now');
@@ -11,8 +30,8 @@ init();
 async function init() {
     // TEMP TEST: render something no matter what (remove after debugging)
   if (new URL(location.href).searchParams.get('safe') === '1') {
-    $content.innerHTML = 'Temporary Safe Mode — P1 default text works.';
-    $status.textContent = 'Safe mode (bypassing config/ICS)';
+    document.getElementById('content').innerHTML = '✅ Safe mode — basic render works.';
+    document.getElementById('status').textContent = 'Safe mode (skipping config/ICS)';
     return; // skip the rest of init()
   }
   try {
@@ -25,6 +44,14 @@ async function init() {
     CFG = cfg; TARGETS = targets; ANNC = annc;
 
     loop();
+    // If nothing rendered in 6s, hint what to check
+    setTimeout(() => {
+      const html = document.getElementById('content')?.innerHTML || '';
+      if (/Loading/i.test(html)) {
+        document.getElementById('status').textContent = 'Still loading… check config/targets URLs.';
+      }
+    }, 6000);
+
     setInterval(loop, (CFG.refresh_seconds || 60) * 1000);
   } catch (e) {
     fail(e);
@@ -180,31 +207,51 @@ function renderItem(item) {
 async function renderImages(item) {
   clearTimers();
 
-  // Case A: explicit list in JSON
-  if (item.items) {
-    cycleImages(item.items.map(it => it.src), item.durationSec);
+  // Case A: explicit list of image objects in targets.json
+  if (Array.isArray(item.items) && item.items.length > 0) {
+    const urls = item.items.map(it => (typeof it === 'string' ? it : it.src)).filter(Boolean);
+    if (urls.length === 0) {
+      $content.textContent = 'No image URLs in items.'; 
+      return;
+    }
+    cycleImages(urls, item.durationSec);
     return;
   }
 
-  // Case B: folder with manifest.json
-  if (item.folder) {
+  // Case B: a folder with a manifest.json (auto-generated)
+  if (typeof item.folder === 'string' && item.folder.trim() !== '') {
     try {
       const res = await fetch(`${item.folder}/manifest.json`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`manifest.json missing in ${item.folder}`);
+      if (!res.ok) throw new Error(`manifest.json not found at ${item.folder}/manifest.json`);
       const list = await res.json();
-
       if (!Array.isArray(list) || list.length === 0) {
-        throw new Error(`manifest.json in ${item.folder} is empty or invalid`);
+        throw new Error(`manifest.json is empty or invalid in ${item.folder}`);
       }
-
-      const urls = list.map(f => `${item.folder}/${f}`);
+      const urls = list.map(name => `${item.folder}/${name}`);
       cycleImages(urls, item.durationSec);
+      return;
     } catch (err) {
       $content.textContent = `Error loading images: ${err.message}`;
       console.error(err);
+      return;
     }
   }
+
+  // Case C: nothing provided
+  $content.textContent = 'No images configured (need "items" or "folder").';
 }
+
+function cycleImages(urls, durationSec) {
+  let i = 0;
+  const show = () => {
+    const src = urls[i % urls.length];
+    $content.innerHTML = `<img src="${src}" alt="" style="max-width:100%;height:auto;">`;
+    i++;
+  };
+  show();
+  slideTimer = setInterval(show, (durationSec || 10) * 1000);
+}
+
 
 function cycleImages(urls, durationSec) {
   let i = 0;
