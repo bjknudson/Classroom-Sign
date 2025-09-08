@@ -322,8 +322,12 @@ async function currentThread(now) {
       const parsed = events.map(e => {
         const start = parseICSDateValue(e.DTSTART, e.DTSTART_TZID, tz);
         const end   = parseICSDateValue(e.DTEND,   e.DTEND_TZID,   tz);
-        return { summary: e.SUMMARY || '', start, end, allDay: e.DTSTART_VALUE === 'DATE' || e.DTEND_VALUE === 'DATE' };
-      }).filter(e => e.start && e.end);
+        const cancelled = (e.STATUS || '').toUpperCase() === 'CANCELLED';
+        return { summary: e.SUMMARY || '', start, end, cancelled };
+      }).filter(e =>
+        !e.cancelled &&
+        e.start && e.end && !isNaN(e.start.getTime()) && !isNaN(e.end.getTime())
+      );
 
       // sort by start time
       parsed.sort((a,b) => a.start - b.start);
@@ -434,17 +438,28 @@ function parseICSEvents(icsText) {
       if (cur && (cur.DTSTART || cur.DTEND)) events.push(cur);
       cur = null;
     } else if (cur) {
-      if (line.startsWith('SUMMARY:')) cur.SUMMARY = line.slice(8);
-      else if (line.startsWith('DTSTART')) {
-        const { params, value } = parseICSParamsAndValue(line);
-        cur.DTSTART = value;
-        cur.DTSTART_TZID = params.TZID || null;
-        cur.DTSTART_VALUE = params.VALUE || null; // e.g., DATE
-      } else if (line.startsWith('DTEND')) {
-        const { params, value } = parseICSParamsAndValue(line);
-        cur.DTEND = value;
-        cur.DTEND_TZID = params.TZID || null;
-        cur.DTEND_VALUE = params.VALUE || null;
+      // Use the generic parser so we don't miss parameterized props
+      const { name, params, value } = parseICSParamsAndValue(line);
+      switch ((name || '').toUpperCase()) {
+        case 'SUMMARY':
+          cur.SUMMARY = value;         // handles SUMMARY and SUMMARY;LANGUAGE=...
+          break;
+        case 'STATUS':
+          cur.STATUS = value;          // <-- needed to ignore cancelled events
+          break;
+        case 'DTSTART':
+          cur.DTSTART = value;
+          cur.DTSTART_TZID = params.TZID || null;
+          cur.DTSTART_VALUE = params.VALUE || null; // e.g., DATE
+          break;
+        case 'DTEND':
+          cur.DTEND = value;
+          cur.DTEND_TZID = params.TZID || null;
+          cur.DTEND_VALUE = params.VALUE || null;
+          break;
+        default:
+          // ignore other lines
+          break;
       }
     }
   }
@@ -457,21 +472,22 @@ function parseICSDateValue(val, tzid, displayTZ) {
   // All-day VALUE=DATE: "YYYYMMDD"
   if (/^\d{8}$/.test(val)) {
     const y = +val.slice(0,4), m = +val.slice(4,6)-1, d = +val.slice(6,8);
-    const asTZ = new Date(new Date(Date.UTC(y, m, d, 0, 0, 0))
+    const local = new Date(
+      new Date(Date.UTC(y, m, d, 0, 0, 0))
       .toLocaleString('en-US', { timeZone: displayTZ || 'America/Los_Angeles' }));
-    return asTZ;
+    return validDateOrNull(local);
   }
 
   // UTC instant
-  if (val.endsWith('Z')) return new Date(val);
+  if (val.endsWith('Z')) return validDateOrNull(new Date(val));
 
-  // Floating or TZID local: "YYYYMMDDTHHMMSS"
+  // Floating or TZID local
   const y = +val.slice(0,4), m = +val.slice(4,6)-1, d = +val.slice(6,8),
         H = +val.slice(9,11) || 0, M = +val.slice(11,13) || 0, S = +val.slice(13,15) || 0;
   const base = new Date(Date.UTC(y, m, d, H, M, S));
   const tz = tzid || displayTZ || 'America/Los_Angeles';
-  const asTZ = new Date(new Date(base).toLocaleString('en-US', { timeZone: tz }));
-  return asTZ;
+  const local = new Date(new Date(base).toLocaleString('en-US', { timeZone: tz }));
+  return validDateOrNull(local);
 }
 
 function pickCurrentICSEvent(icsText, now, displayTZ) {
@@ -595,7 +611,7 @@ function el(tag, attrs = {}, children = []) {
   return n;
 }
 
-
+function validDateOrNull(d) {return (d instanceof Date && !isNaN(d.getTime())) ? d : null;}
 async function fetchJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.json(); }
 async function fetchText(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.text(); }
 function icsUrlWithCacheBust(url){ const u=new URL(url); u.searchParams.set('t', Date.now()); return u.toString(); }
