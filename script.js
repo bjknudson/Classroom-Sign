@@ -131,7 +131,7 @@ async function loop() {
     }
 
     showDebug({
-    now: formatNow(now, tz),
+    now: formatNowNoTZ(now),
     eventSummary: threadInfo.summary || '(none)',
     mappedThread: threadInfo.thread || '(none)',
     start: threadInfo.start ? threadInfo.start.toString() : null,
@@ -269,17 +269,6 @@ async function renderImages(item) {
   $content.textContent = 'No images configured (need "items" or "folder").';
 }
 
-function cycleImages(urls, durationSec) {
-  let i = 0;
-  const show = () => {
-    const src = urls[i % urls.length];
-    $content.innerHTML = `<img src="${src}" alt="" style="max-width:100%;height:auto;">`;
-    i++;
-  };
-  show();
-  slideTimer = setInterval(show, (durationSec || 10) * 1000);
-}
-
 
 function cycleImages(urls, durationSec) {
   let i = 0;
@@ -320,13 +309,13 @@ async function currentThread(now) {
       const icsText = await fetchText(icsUrlWithCacheBust(url));
       const events = parseICSEvents(icsText);
       const parsed = events.map(e => {
-        const start = parseICSDateValue(e.DTSTART, e.DTSTART_TZID, tz);
-        const end   = parseICSDateValue(e.DTEND,   e.DTEND_TZID,   tz);
+        const start = validDateOrNull(parseICSDateValue(e.DTSTART, e.DTSTART_TZID, tz));
+        const end   = validDateOrNull(parseICSDateValue(e.DTEND,   e.DTEND_TZID,   tz));
         const cancelled = (e.STATUS || '').toUpperCase() === 'CANCELLED';
         return { summary: e.SUMMARY || '', start, end, cancelled };
       }).filter(e =>
         !e.cancelled &&
-        e.start && e.end && !isNaN(e.start.getTime()) && !isNaN(e.end.getTime())
+        e.start && e.end
       );
 
       // sort by start time
@@ -530,12 +519,20 @@ async function inspectICS(now) {
     try {
       const icsText = await fetchText(icsUrlWithCacheBust(url));
       const eventsRaw = parseICSEvents(icsText);
-      const events = eventsRaw.map(e => {
-        const start = parseICSDateValue(e.DTSTART, e.DTSTART_TZID, tz);
-        const end   = parseICSDateValue(e.DTEND,   e.DTEND_TZID,   tz);
-        return { summary: e.SUMMARY || '', start, end };
-      }).filter(e => e.start && e.end)
+      const events = eventsRaw
+        .map(e => {
+          const start = validDateOrNull(parseICSDateValue(e.DTSTART, e.DTSTART_TZID, tz));
+          const end   = validDateOrNull(parseICSDateValue(e.DTEND,   e.DTEND_TZID,   tz));
+          const cancelled = (e.STATUS || '').toUpperCase() === 'CANCELLED';
+          return { summary: e.SUMMARY || '', start, end, cancelled };
+        })
+        .filter(e => !e.cancelled && e.start && e.end)
         .sort((a,b) => a.start - b.start);
+      
+      const dropped = eventsRaw.length - events.length;
+      if (dropped > 0) {
+        section.appendChild(el('p', {text: `Ignored ${dropped} cancelled/invalid events.`}));
+      }
 
       section.appendChild(el('p', {text: `Parsed events: ${events.length}`}));
 
