@@ -365,16 +365,12 @@ async function currentThread(now) {
         const title = (hit.summary || '').toLowerCase();
 
         // Extract period number/letter if present (handles "1st period", "period 2", "p3", "Period A", "p10")
-        const numMatch = title.match(/\b(?:p(?:eriod)?\s*)?([0-9]{1,2}|[a-z])\b/);
-        let thread = null;
-        if (numMatch) {
-          const token = numMatch[1];
-          thread = isNaN(token) ? ('p' + token) : ('p' + parseInt(token, 10));
-        } else {
-          // fallback to event_map
-          const key = Object.keys(CFG.event_map || {}).find(k => title.includes(k.toLowerCase()));
-          thread = key ? CFG.event_map[key] : CFG.default_thread;
-        }
+        const thread = mapSummaryToThread(    //NEW AFTER MOVING MAP TO UTILS
+          hit.summary,
+          CFG.event_map || {},
+          CFG.default_thread
+        );
+
 
         found = { thread, start: hit.start, end: hit.end, summary: hit.summary, debug: { reason: current ? 'current' : 'grace', url } };
         break;
@@ -563,9 +559,7 @@ async function inspectICS(now) {
       section.appendChild(el('p', {text: `Parsed events: ${events.length}`}));
 
       const table = el('table', {class: 'ics-table'});
-      const thead = el('thead', {}, [ el('tr', {}, [
-        el('th', {text: 'Contains Now?'}), el('th', {text: 'Start'}), el('th', {text: 'End'}), el('th', {text: 'Summary'}), el('th', {text: 'Thread?'}),
-      ])]);
+      const thread = mapSummaryToThread(ev.summary, CFG.event_map || {}, CFG.default_thread) || '(n/a)';   //NEW WHEN ADDED MAPPING TO UTILS
       table.appendChild(thead);
       const tbody = el('tbody');
 
@@ -748,6 +742,38 @@ function expandEventsNearNow(events, now, tz, windowDaysBefore = 7, windowDaysAf
   out.sort((a,b)=> a.start - b.start);
   return out;
 }
+
+function mapSummaryToThread(title, eventMap, defaultThread) {
+  const t = (title || '').toLowerCase();
+
+  // Pattern A: "period 2", "p2", "p 2", "period a"
+  let m = t.match(/\b(?:p(?:eriod)?\s*)([0-9]{1,2}|[a-z])\b/i);
+  if (m) {
+    const tok = m[1];
+    return isNaN(tok) ? ('p' + tok) : ('p' + parseInt(tok, 10));
+  }
+
+  // Pattern B: number-first ordinals "2nd period", "1st", "7th block"
+  m = t.match(/\b([0-9]{1,2})(?:st|nd|rd|th)?\b/);
+  if (m) {
+    // Ensure it's not a year or time; 1–12 are safe for periods
+    const n = parseInt(m[1], 10);
+    if (n >= 1 && n <= 12) return 'p' + n;
+  }
+
+  // Pattern C: letter periods like "Period A"
+  m = t.match(/\b([a-z])\b(?:\s*(?:period|block))?/i);
+  if (m && m[1].length === 1) return 'p' + m[1].toLowerCase();
+
+  // Pattern D: fall back to explicit event_map keywords
+  if (eventMap) {
+    const key = Object.keys(eventMap).find(k => t.includes(k.toLowerCase()));
+    if (key) return eventMap[key];
+  }
+
+  return defaultThread || null;
+}
+
 
 function validDateOrNull(d) {return (d instanceof Date && !isNaN(d.getTime())) ? d : null;}
 async function fetchJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.json(); }
