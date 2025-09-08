@@ -17,9 +17,33 @@
 })();
 
 
-const $content = document.getElementById('content');
-const $status  = document.getElementById('status');
-const $now     = document.getElementById('now');
+// Replace the old lines:
+//// const $content = document.getElementById('content');
+//// const $status  = document.getElementById('status');
+//// const $now     = document.getElementById('now');
+
+let $content, $status, $now;
+
+// Kick off only after DOM is parsed
+document.addEventListener('DOMContentLoaded', () => {
+  $content = document.getElementById('content');
+  $status  = document.getElementById('status');
+  $now     = document.getElementById('now');
+
+  // Guard: if the elements are missing, show a loud message
+  if (!$content || !$status || !$now) {
+    const missing = [
+      !$content && '#content',
+      !$status  && '#status',
+      !$now     && '#now'
+    ].filter(Boolean).join(', ');
+    alert(`Display page is missing required elements: ${missing}`);
+    return;
+  }
+
+  init();  // <-- move init() here
+});
+
 
 let CFG, TARGETS, ANNC;
 let ticker = null;
@@ -52,8 +76,9 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+// Remove the old top-level call:
+// init();
 
-init();
 
 async function init() {
     // TEMP TEST: render something no matter what (remove after debugging)
