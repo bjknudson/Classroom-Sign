@@ -308,15 +308,7 @@ async function currentThread(now) {
     try {
       const icsText = await fetchText(icsUrlWithCacheBust(url));
       const events = parseICSEvents(icsText);
-      const parsed = events.map(e => {
-        const start = validDateOrNull(parseICSDateValue(e.DTSTART, e.DTSTART_TZID, tz));
-        const end   = validDateOrNull(parseICSDateValue(e.DTEND,   e.DTEND_TZID,   tz));
-        const cancelled = (e.STATUS || '').toUpperCase() === 'CANCELLED';
-        return { summary: e.SUMMARY || '', start, end, cancelled };
-      }).filter(e =>
-        !e.cancelled &&
-        e.start && e.end
-      );
+      const parsed = expandEventsNearNow(events, now, tz, 7, 7);  // ← expand RRULEs near now
 
       // sort by start time
       parsed.sort((a,b) => a.start - b.start);
@@ -325,7 +317,7 @@ async function currentThread(now) {
       const current = parsed.find(e => now >= e.start && now < e.end);
 
       // grace window: if none, take event starting within next 2 minutes
-      const GRACE_MS = 2 * 60 * 1000;
+      const GRACE_MS = 10 * 60 * 1000;  //10 mins
       const soon = parsed.find(e => e.start >= now && (e.start - now) <= GRACE_MS);
 
       debugInfo.lookedAt.push({ url, count: parsed.length, first: parsed[0]?.start?.toString() || null, last: parsed.at(-1)?.end?.toString() || null });
@@ -446,6 +438,9 @@ function parseICSEvents(icsText) {
           cur.DTEND_TZID = params.TZID || null;
           cur.DTEND_VALUE = params.VALUE || null;
           break;
+        case 'RRULE':
+          cur.RRULE = value;       // e.g., "FREQ=WEEKLY;BYDAY=MO,TH,FR;UNTIL=20260606T065959Z"
+          break;
         default:
           // ignore other lines
           break;
@@ -519,20 +514,13 @@ async function inspectICS(now) {
     try {
       const icsText = await fetchText(icsUrlWithCacheBust(url));
       const eventsRaw = parseICSEvents(icsText);
-      const events = eventsRaw
-        .map(e => {
-          const start = validDateOrNull(parseICSDateValue(e.DTSTART, e.DTSTART_TZID, tz));
-          const end   = validDateOrNull(parseICSDateValue(e.DTEND,   e.DTEND_TZID,   tz));
-          const cancelled = (e.STATUS || '').toUpperCase() === 'CANCELLED';
-          return { summary: e.SUMMARY || '', start, end, cancelled };
-        })
-        .filter(e => !e.cancelled && e.start && e.end)
-        .sort((a,b) => a.start - b.start);
+     
+      // Expand recurring events ±7 days around "now"
+      const events = expandEventsNearNow(eventsRaw, now, tz, 7, 7);
       
-      const dropped = eventsRaw.length - events.length;
-      if (dropped > 0) {
-        section.appendChild(el('p', {text: `Ignored ${dropped} cancelled/invalid events.`}));
-      }
+      section.appendChild(el('p', {
+        text: `Expanded events in ±7-day window: ${events.length}`
+      }));
 
       section.appendChild(el('p', {text: `Parsed events: ${events.length}`}));
 
@@ -606,6 +594,121 @@ function el(tag, attrs = {}, children = []) {
   }
   for (const c of [].concat(children)) n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
   return n;
+}
+// --- RRULE expansion (minimal: DAILY/WEEKLY with BYDAY/UNTIL/INTERVAL)
+
+const BYDAY_MAP = { SU:0, MO:1, TU:2, WE:3, TH:4, FR:5, SA:6 };
+
+function parseRRule(rrule) {
+  // rrule like: "FREQ=WEEKLY;WKST=SU;UNTIL=20260606T065959Z;BYDAY=MO,TH,FR"
+  const out = {};
+  for (const part of (rrule || '').split(';')) {
+    if (!part) continue;
+    const [k,v] = part.split('=');
+    if (!k) continue;
+    out[k.toUpperCase()] = v || '';
+  }
+  // normalize
+  if (out.FREQ) out.FREQ = out.FREQ.toUpperCase();
+  if (out.BYDAY) out.BYDAY = out.BYDAY.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+  if (out.INTERVAL) out.INTERVAL = Math.max(1, parseInt(out.INTERVAL, 10) || 1);
+  else out.INTERVAL = 1;
+  return out;
+}
+
+function sameDay(d1, d2) {
+  return d1.getFullYear()===d2.getFullYear() && d1.getMonth()===d2.getMonth() && d1.getDate()===d2.getDate();
+}
+
+function withDateKeepTime(template, dateLike) {
+  // clone template date but replace Y-M-D with dateLike's Y-M-D (keeps the time portion)
+  const d = new Date(template);
+  d.setFullYear(dateLike.getFullYear(), dateLike.getMonth(), dateLike.getDate());
+  return d;
+}
+
+/**
+ * Expand events with RRULE into concrete instances within [winStart, winEnd]
+ * Returns array of {summary, start, end, cancelled}
+ */
+function expandEventsNearNow(events, now, tz, windowDaysBefore = 7, windowDaysAfter = 7) {
+  const winStart = new Date(now); winStart.setDate(winStart.getDate() - windowDaysBefore);
+  const winEnd   = new Date(now); winEnd.setDate(winEnd.getDate() + windowDaysAfter);
+
+  const out = [];
+
+  for (const e of events) {
+    // Parse base start/end
+    const baseStart = validDateOrNull(parseICSDateValue(e.DTSTART, e.DTSTART_TZID, tz));
+    const baseEnd   = validDateOrNull(parseICSDateValue(e.DTEND,   e.DTEND_TZID,   tz));
+    const cancelled = (e.STATUS || '').toUpperCase() === 'CANCELLED';
+    const summary = e.SUMMARY || '';
+
+    if (!baseStart || !baseEnd || cancelled) continue;
+
+    if (!e.RRULE) {
+      // Single instance
+      if (baseEnd >= winStart && baseStart <= winEnd) {
+        out.push({ summary, start: baseStart, end: baseEnd, cancelled: false });
+      }
+      continue;
+    }
+
+    // Recurring: expand minimally (DAILY/WEEKLY)
+    const rule = parseRRule(e.RRULE);
+    const durMs = baseEnd - baseStart;
+    const until = e.DTEND_VALUE === 'DATE' || e.DTSTART_VALUE === 'DATE'
+      ? null  // all-day UNTIL handling skipped for simplicity
+      : (rule.UNTIL ? validDateOrNull(parseICSDateValue(rule.UNTIL, null, tz)) : null);
+
+    if (rule.FREQ === 'DAILY') {
+      // walk days by INTERVAL
+      // Start from the first day in window aligned to INTERVAL from baseStart
+      let cursor = new Date(baseStart);
+      // move cursor to winStart or later
+      while (cursor < winStart) cursor.setDate(cursor.getDate() + rule.INTERVAL);
+      for (; cursor <= winEnd; cursor.setDate(cursor.getDate() + rule.INTERVAL)) {
+        if (until && cursor > until) break;
+        const s = withDateKeepTime(baseStart, cursor);
+        const eend = new Date(s.getTime() + durMs);
+        out.push({ summary, start: s, end: eend, cancelled: false });
+      }
+    } else if (rule.FREQ === 'WEEKLY') {
+      // BYDAY required for school schedules
+      const by = (rule.BYDAY && rule.BYDAY.length) ? rule.BYDAY : [ 'MO','TU','WE','TH','FR' ];
+      // find the Monday of the week containing winStart (or WKST if you care)
+      const startWeek = new Date(winStart);
+      startWeek.setHours(0,0,0,0);
+      startWeek.setDate(startWeek.getDate() - startWeek.getDay()); // to Sunday
+
+      // step weeks by INTERVAL
+      for (let w = new Date(startWeek); w <= winEnd; w.setDate(w.getDate() + 7*rule.INTERVAL)) {
+        for (const code of by) {
+          const dow = BYDAY_MAP[code]; if (dow == null) continue;
+          const occDate = new Date(w); // Sunday of this block
+          occDate.setDate(occDate.getDate() + dow);
+          // skip if before baseStart's calendar date (recurrences don't occur before the first instance's date)
+          if (occDate < new Date(baseStart.getFullYear(), baseStart.getMonth(), baseStart.getDate())) continue;
+          if (until && occDate > until) continue;
+          // place the base time onto this occurrence date
+          const s = withDateKeepTime(baseStart, occDate);
+          const eend = new Date(s.getTime() + durMs);
+          if (eend >= winStart && s <= winEnd) {
+            out.push({ summary, start: s, end: eend, cancelled: false });
+          }
+        }
+      }
+    } else {
+      // other FREQ types not implemented — keep the base only (better than nothing)
+      if (baseEnd >= winStart && baseStart <= winEnd) {
+        out.push({ summary, start: baseStart, end: baseEnd, cancelled: false });
+      }
+    }
+  }
+
+  // sort chronologically
+  out.sort((a,b)=> a.start - b.start);
+  return out;
 }
 
 function validDateOrNull(d) {return (d instanceof Date && !isNaN(d.getTime())) ? d : null;}
