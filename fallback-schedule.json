@@ -5,7 +5,7 @@
     {"start": "10:30", "end": "11:20", "thread": "p3"},
     {"start": "11:30", "end": "12:25", "thread": "p4"},
     {"start": "13:05", "end": "13:55", "thread": "p5"},
-    {"start": "14:05", "end": "14:55", "thread": "p6"},
+    {"start": "14:05", "end": "14:55", "thread": "p6"}, 
     {"start": "15:05", "end": "15:55", "thread": "p7"}
   ],
   "Tue": [
@@ -38,12 +38,13 @@
     {"start": "15:05", "end": "15:55", "thread": "p7"} 
   ],
   "Sat": [
-    {"start": "08:30", "end": "23:20", "thread": "p1"},
+    {"start": "08:30", "end": "23:20", "thread": "p1"},  // testing schedule
     {"start": "09:30", "end": "10:20", "thread": "p2"},
-    {"start": "10:30", "end": "11:20", "thread": "p3"},
-    {"start": "11:30", "end": "12:25", "thread": "p4"},
-    {"start": "13:05", "end": "13:55", "thread": "p5"},
-    {"start": "14:05", "end": "14:55", "thread": "p6"}, 
+    {"start": "15:05", "end": "15:55", "thread": "p7"} 
+  ],
+  "Sun": [
+    {"start": "08:30", "end": "23:20", "thread": "p1"},  //testing schedule
+    {"start": "09:30", "end": "10:20", "thread": "p2"},
     {"start": "15:05", "end": "15:55", "thread": "p7"} 
   ]
 }
