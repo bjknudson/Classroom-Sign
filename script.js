@@ -297,9 +297,16 @@ async function currentThread(now) {
   const force = q.get('force');
   if (force) return { thread: force, start: null, end: null, summary: '(forced)', debug: { reason: 'forced' } };
 
-  const icsUrlList = Array.isArray(CFG.ics_urls)
-    ? CFG.ics_urls
-    : (CFG.ics_proxy_url || CFG.ics_url ? [CFG.ics_proxy_url || CFG.ics_url] : []);
+  const q = new URL(location.href).searchParams;
+
+  // TEST OVERRIDE: ?ics=https://...workers.dev/ics
+  const icsOverride = q.get('ics');
+  const icsUrlList = icsOverride
+    ? [icsOverride]
+    : (Array.isArray(CFG.ics_urls)
+        ? CFG.ics_urls
+        : (CFG.ics_proxy_url || CFG.ics_url ? [CFG.ics_proxy_url || CFG.ics_url] : []));
+
 
   let debugInfo = { reason: '', lookedAt: [], nextEvent: null };
   let found = null;
