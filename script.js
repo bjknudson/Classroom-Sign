@@ -181,56 +181,61 @@ function pickTimeRemaining(minutesLeft) {
 
 function renderItem(item) {
   clearTimers();
+
   if (item.type === 'text') {
     $content.innerHTML = escapeHTML(item.content).replace(/\n/g, '<br/>');
-  } else if (item.type === 'slides') {
-      // Try iframe first
-      const iframe = document.createElement('iframe');
-      iframe.className = 'slides-embed';
-      iframe.src = item.url;
-      iframe.allow = "fullscreen";
-      iframe.loading = "lazy";
-    
-      let loaded = false;
-      iframe.onload = () => { loaded = true; };
-      $content.innerHTML = '';
-      $content.appendChild(iframe);
-    
-      // Fallback to images: scrape published deck for slide IDs
-      setTimeout(async () => {
-        if (!loaded) {
-          try {
-            const res = await fetch(item.url, { cache: 'no-store' });
-            const html = await res.text();
 
-            // Find all "slide=id.gXXXX" occurrences
-            const matches = [...html.matchAll(/slide=id\.(g[a-zA-Z0-9]+)/g)];
-            const uniqueIds = [...new Set(matches.map(m => m[1]))];
-    
-            if (uniqueIds.length) {
-              let i = 0;
-              const show = () => {
-                const src = `${item.url.replace(/\/pub.*/, '')}/pub?slide=id.${uniqueIds[i % uniqueIds.length]}`;
-                $content.innerHTML = `<img src="${src}" alt="slide image" style="max-width:100%;height:auto;">`;
-                i++;
-              };
-              show();
-              slideTimer = setInterval(show, (item.durationSec || 10) * 1000);
-            } else {
-              $content.textContent = "No slides found in deck.";
-            }
-          } catch (err) {
-            $content.textContent = "Error loading slides fallback.";
-            console.error("Slides fallback error", err);
+  } else if (item.type === 'slides') {
+    // Try iframe first
+    const iframe = document.createElement('iframe');
+    iframe.className = 'slides-embed';
+    iframe.src = item.url;
+    iframe.allow = "fullscreen";
+    iframe.loading = "lazy";
+
+    let loaded = false;
+    iframe.onload = () => { loaded = true; };
+    $content.innerHTML = '';
+    $content.appendChild(iframe);
+
+    // Fallback to images: scrape published deck for slide IDs
+    setTimeout(async () => {
+      if (!loaded) {
+        try {
+          const res = await fetch(item.url, { cache: 'no-store' });
+          const html = await res.text();
+
+          // Find all "slide=id.gXXXX" occurrences
+          const matches = [...html.matchAll(/slide=id\.(g[a-zA-Z0-9]+)/g)];
+          const uniqueIds = [...new Set(matches.map(m => m[1]))];
+
+          if (uniqueIds.length) {
+            let i = 0;
+            const show = () => {
+              const src = `${item.url.replace(/\/pub.*/, '')}/pub?slide=id.${uniqueIds[i % uniqueIds.length]}`;
+              $content.innerHTML = `<img src="${src}" alt="slide image" style="max-width:100%;height:auto;">`;
+              i++;
+            };
+            show();
+            slideTimer = setInterval(show, (item.durationSec || 10) * 1000);
+          } else {
+            $content.textContent = "No slides found in deck.";
           }
+        } catch (err) {
+          $content.textContent = "Error loading slides fallback.";
+          console.error("Slides fallback error", err);
         }
-      }, 5000);
-} else if (item.type === 'images') {
+      }
+    }, 5000);
+
+  } else if (item.type === 'images') {
     renderImages(item);
+
   } else {
     $content.textContent = 'Unsupported item type.';
   }
 }
+
 
 async function renderImages(item) {
   clearTimers();
@@ -296,8 +301,6 @@ async function currentThread(now) {
   const q = new URL(location.href).searchParams;
   const force = q.get('force');
   if (force) return { thread: force, start: null, end: null, summary: '(forced)', debug: { reason: 'forced' } };
-
-  const q = new URL(location.href).searchParams;
 
   // TEST OVERRIDE: ?ics=https://...workers.dev/ics
   const icsOverride = q.get('ics');
