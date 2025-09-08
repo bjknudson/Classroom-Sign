@@ -307,6 +307,9 @@ async function currentThread(now) {
         ? CFG.ics_urls
         : (CFG.ics_proxy_url || CFG.ics_url ? [CFG.ics_proxy_url || CFG.ics_url] : []));
 
+  if (!icsUrlList.length) {
+    return { thread: null, start: null, end: null, summary: '', debug: { reason: 'no-ics-config', lookedAt: [] } };
+  }
 
   let debugInfo = { reason: '', lookedAt: [], nextEvent: null };
   let found = null;
