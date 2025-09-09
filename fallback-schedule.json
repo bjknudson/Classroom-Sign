@@ -26,7 +26,14 @@
     {"start": "11:30", "end": "12:25", "thread": "p4"},
     {"start": "13:05", "end": "13:55", "thread": "p5"},
     {"start": "14:05", "end": "14:55", "thread": "p6"},
-    {"start": "15:05", "end": "15:55", "thread": "p7"} 
+    {"start": "15:05", "end": "15:55", "thread": "p7"},
+    {"start": "18:30", "end": "18:40", "thread": "p1"},
+    {"start": "18:45", "end": "18:55", "thread": "p2"},
+    {"start": "19:00", "end": "19:10", "thread": "p3"},
+    {"start": "19:15", "end": "19:25", "thread": "p4"},
+    {"start": "19:30", "end": "19:40", "thread": "p5"},
+    {"start": "19:45", "end": "19:55", "thread": "p6"},
+    {"start": "20:00", "end": "20:10", "thread": "p7"}
   ],
   "Fri": [
     {"start": "08:30", "end": "09:20", "thread": "p1"},
