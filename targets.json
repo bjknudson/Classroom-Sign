@@ -13,8 +13,26 @@
     }
   },
   "byDate": {
-    "2025-09-04": {
-      "p1": { "type": "text", "content": "P1 Thursday — Empathize interviews, 3 insights." 
+    "2025-09-09": {
+      "p3": { "type": "text", "content": "I can carry out a prevention strategy safely and effectively." 
+      },
+      "p5": {
+        "type": "slides",
+        "url": "https://docs.google.com/presentation/d/e/.../pub?start=false&loop=false&delayms=3000"
+      }, 
+      "p7": { "type": "text", "content": "I can give and recieve additive design feedback." 
+      },
+      "p8": {
+        "type": "images",
+        "durationSec": 12,
+        "items": [
+          {"src": "https://yourcdn/img/safety_goggles.png", "caption": "Goggles required."},
+          {"src": "https://yourcdn/img/soldering_tips.png", "caption": "Tin both sides first."}
+        ]
+      }
+    }
+    "2025-09-10": {
+      "p2": { "type": "text", "content": "I can carry out a prevention strategy safely and effectively." 
       },
       "p3": {
         "type": "slides",
