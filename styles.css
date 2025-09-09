@@ -1,6 +1,6 @@
 /* === Global tuning === */
 :root {
-  --scale: 1;                /* master size knob (1 = normal) */
+  --scale: 2.5;                /* master size knob (1 = normal) */
   --maxw: 1000px;            /* line length target */
   --pad: 2.2rem;             /* content padding */
   --fg: #ffffff;
