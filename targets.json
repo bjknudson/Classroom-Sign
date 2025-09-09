@@ -46,6 +46,22 @@
           {"src": "https://yourcdn/img/soldering_tips.png", "caption": "Tin both sides first."}
         ]
       }
+    },
+    "2025-09-08": {
+      "p2": { "type": "text", "content": "I can carry out a prevention strategy safely and effectively." 
+      },
+      "p3": {
+        "type": "slides",
+        "url": "https://docs.google.com/presentation/d/e/.../pub?start=false&loop=false&delayms=3000"
+      },
+      "p4": {
+        "type": "images",
+        "durationSec": 12,
+        "items": [
+          {"src": "https://yourcdn/img/safety_goggles.png", "caption": "Goggles required."},
+          {"src": "https://yourcdn/img/soldering_tips.png", "caption": "Tin both sides first."}
+        ]
+      }
     }
   }
 }
