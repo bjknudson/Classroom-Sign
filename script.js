@@ -89,12 +89,30 @@ async function init() {
   }
   try {
     // Load configs, but don't crash if one is missing.
-    const [cfg, targets, annc] = await Promise.all([
-      fetchJSON('config.json').catch(e => ({ timezone: 'America/Los_Angeles', refresh_seconds: 60 })),
-      fetchJSON('targets.json').catch(e => ({ defaults: {} , byDate: {} })),
-      fetchJSON('announcements.json').catch(e => ({ rotation: [], timeRemaining: [] }))
-    ]);
-    CFG = cfg; TARGETS = targets; ANNC = annc;
+    // const [cfg, targets, annc] = await Promise.all([
+    //   fetchJSON('config.json').catch(e => ({ timezone: 'America/Los_Angeles', refresh_seconds: 60 })),
+    //   fetchJSON('targets.json').catch(e => ({ defaults: {} , byDate: {} })),
+    //   fetchJSON('announcements.json').catch(e => ({ rotation: [], timeRemaining: [] }))
+    // ]);
+    // CFG = cfg; TARGETS = targets; ANNC = annc;
+
+
+    //replaced above with below so that targets can be pulled from a public csv
+      const [cfg, targets, annc] = await Promise.all([
+        fetchJSON('config.json').catch(() => ({
+          timezone: 'America/Los_Angeles',
+          refresh_seconds: 60
+        })),
+        loadTargetsWide(),                 // NEW: pulls from Google Sheet CSV
+        fetchJSON('announcements.json').catch(() => ({
+          rotation: [],
+          timeRemaining: []
+        }))
+      ]);
+      CFG = cfg;
+      TARGETS = targets;
+      ANNC = annc;
+  
 
     loop();
     // If nothing rendered in 6s, hint what to check
@@ -601,9 +619,91 @@ async function inspectICS(now) {
   $content.appendChild(wrap);
   $status.textContent = 'Inspector';
 }
+/*-------------- csv parsing -----------------*/
+function itemFromCell(cell) {
+  if (!cell) return null;
+  const s = cell.trim();
+  // images: img:<folder>|<sec>
+  if (s.toLowerCase().startsWith('img:')) {
+    const rest = s.slice(4).trim();
+    const [folder, sec] = rest.split('|').map(x => x.trim());
+    const obj = { type: 'images', folder };
+    if (sec && !isNaN(+sec)) obj.durationSec = +sec;
+    return obj;
+  }
+  // slides: slides:<url>|<sec>
+  if (s.toLowerCase().startsWith('slides:')) {
+    const rest = s.slice(7).trim();
+    const [url, sec] = rest.split('|').map(x => x.trim());
+    const obj = { type: 'slides', url };
+    if (sec && !isNaN(+sec)) obj.durationSec = +sec;
+    return obj;
+  }
+  // otherwise: plain text
+  return { type: 'text', content: s };
+}
+
+//read csv into json
+async function loadTargetsWide() {
+  if (!CFG.targets_csv_url) return fetchJSON('targets.json').catch(()=>({defaults:{}, byDate:{}}));
+  const text = await fetchCSV(CFG.targets_csv_url);
+  const rows = parseCSVText(text);
+
+  const out = { defaults: {}, byDate: {} };
+  for (const r of rows) {
+    const date = (r.date || '').toLowerCase();
+    // Accept columns p1..p12 (or pA etc.); ignore unknowns
+    Object.keys(r).forEach(k => {
+      if (!/^p([0-9]{1,2}|[a-z])$/.test(k)) return;  // only p1.., pA etc.
+      const cell = r[k];
+      if (!cell) return;
+      const item = itemFromCell(cell);
+      if (!item) return;
+
+      if (date === '' || date === 'default') {
+        out.defaults[k] = item;
+      } else {
+        if (!out.byDate[date]) out.byDate[date] = {};
+        out.byDate[date][k] = item;
+      }
+    });
+  }
+  return out;
+}
+
 
 
 /* ---------- Utils ---------- */
+
+async function fetchCSV(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`CSV fetch failed ${r.status} for ${url}`);
+  return (await r.text()).trim();
+}
+
+function parseCSVText(text) {
+  const rows = text.split(/\r?\n/).map(line => {
+    const cells = [];
+    let cur = '', inQ = false;
+    for (let i=0; i<line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQ && line[i+1] === '"') { cur += '"'; i++; }
+        else inQ = !inQ;
+      } else if (ch === ',' && !inQ) { cells.push(cur.trim()); cur=''; }
+      else { cur += ch; }
+    }
+    cells.push(cur.trim());
+    return cells;
+  });
+  const headers = rows.shift().map(h => h.toLowerCase());
+  return rows.map(r => {
+    const obj = {};
+    headers.forEach((h,i) => obj[h] = (r[i] ?? '').trim());
+    return obj;
+  });
+}
+
 
 function localNow(tz) { return new Date(new Date().toLocaleString('en-US', { timeZone: tz })); }
 function toYMD(d) { return d.toISOString().slice(0,10); }
