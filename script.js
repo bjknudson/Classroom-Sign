@@ -67,6 +67,7 @@ let slideTimer = null;
 
 // Reload when network returns (helps after Wi-Fi blips)
 window.addEventListener('online', () => setTimeout(()=>location.reload(), 3000));
+window.addEventListener('resize', () => fitContentToStage());
 
 // If the tab ever gets hidden and comes back (e.g., HDMI sync), refresh content
 document.addEventListener('visibilitychange', () => {
@@ -259,6 +260,7 @@ function renderItem(item) {
   } else {
     $content.textContent = 'Unsupported item type.';
   }
+  fitContentToStage(0.78); // fills ~78% of stage height
 }
 
 
@@ -308,6 +310,7 @@ function cycleImages(urls, durationSec) {
     i++;
   };
   show();
+  fitContentToStage();
   slideTimer = setInterval(show, (durationSec || 10) * 1000);
 }
 
@@ -774,6 +777,29 @@ function mapSummaryToThread(title, eventMap, defaultThread) {
   return defaultThread || null;
 }
 
+/* --------- adapt to display ---------*/
+
+function fitContentToStage(targetFill = 0.78) {
+  const stage = document.getElementById('stage');
+  const content = document.getElementById('content');
+  if (!stage || !content) return;
+
+  // reset before measuring
+  document.documentElement.style.setProperty('--auto', '1');
+
+  // measure after render
+  requestAnimationFrame(() => {
+    const stageH = stage.clientHeight || 1;
+    const contentH = content.scrollHeight || 1;
+    const fill = contentH / stageH;
+
+    // If content is small (< target), scale up; if too big, cap at current size.
+    if (fill < targetFill) {
+      const factor = Math.min(3, targetFill / Math.max(fill, 0.01)); // cap x3 to avoid extremes
+      document.documentElement.style.setProperty('--auto', String(factor));
+    }
+  });
+}
 
 function validDateOrNull(d) {return (d instanceof Date && !isNaN(d.getTime())) ? d : null;}
 async function fetchJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.json(); }
