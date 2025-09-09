@@ -16,11 +16,9 @@
     "2025-09-09": {
       "p3": { "type": "text", "content": "I can carry out a prevention strategy safely and effectively." 
       },
-      "p5": {
-        "type": "slides",
-        "url": "https://docs.google.com/presentation/d/e/.../pub?start=false&loop=false&delayms=3000"
-      }, 
-      "p7": { "type": "text", "content": "I can give and recieve additive design feedback." 
+      "p5": { "type": "text", "content": "I can take a break and prepare for the next class." 
+      },
+      "p7": { "type": "text", "content": "I can give and receive ADDITIVE Design Feedback." 
       },
       "p8": {
         "type": "images",
