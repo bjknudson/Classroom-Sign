@@ -81,49 +81,52 @@ document.addEventListener('visibilitychange', () => {
 
 
 async function init() {
-    // TEMP TEST: render something no matter what (remove after debugging)
-  if (new URL(location.href).searchParams.get('safe') === '1') {
-    document.getElementById('content').innerHTML = '✅ Safe mode — basic render works.';
-    document.getElementById('status').textContent = 'Safe mode (skipping config/ICS)';
-    return; // skip the rest of init()
+  // SAFE MODE: https://.../?safe=1
+  const qp = new URL(location.href).searchParams;
+  if (qp.get('safe') === '1') {
+    const c = document.getElementById('content');
+    const s = document.getElementById('status');
+    if (c) c.innerHTML = '✅ Safe mode — basic render works.';
+    if (s) s.textContent = 'Safe mode (skipping config/ICS)';
+    return;
   }
+
   try {
-    // Load configs, but don't crash if one is missing.
-    // const [cfg, targets, annc] = await Promise.all([
-    //   fetchJSON('config.json').catch(e => ({ timezone: 'America/Los_Angeles', refresh_seconds: 60 })),
-    //   fetchJSON('targets.json').catch(e => ({ defaults: {} , byDate: {} })),
-    //   fetchJSON('announcements.json').catch(e => ({ rotation: [], timeRemaining: [] }))
-    // ]);
-    // CFG = cfg; TARGETS = targets; ANNC = annc;
+    // 1) Load config first
+    CFG = await fetchJSON('config.json').catch(() => ({
+      timezone: 'America/Los_Angeles',
+      refresh_seconds: 60
+    }));
 
+    // 2) Load targets + announcements (CSV if configured, else local JSON)
+    const [targets, annc] = await Promise.all([
+      CFG.targets_csv_url
+        ? loadTargetsWide(CFG.targets_csv_url)
+        : fetchJSON('targets.json').catch(() => ({ defaults: {}, byDate: {} })),
 
-    //replaced above with below so that targets can be pulled from a public csv
-      const [cfg, targets, annc] = await Promise.all([
-        fetchJSON('config.json').catch(() => ({
-          timezone: 'America/Los_Angeles',
-          refresh_seconds: 60
-        })),
-        loadTargetsWide(),                 // NEW: pulls from Google Sheet CSV
-        fetchJSON('announcements.json').catch(() => ({
-          rotation: [],
-          timeRemaining: []
-        }))
-      ]);
-      CFG = cfg;
-      TARGETS = targets;
-      ANNC = annc;
-  
+      CFG.announcements_csv_url
+        ? loadAnnouncements(CFG.announcements_csv_url)
+        : fetchJSON('announcements.json').catch(() => ({ rotation: [], timeRemaining: [] }))
+    ]);
 
+    TARGETS = targets;
+    ANNC = annc;
+
+    // 3) Start rendering loop
     loop();
-    // If nothing rendered in 6s, hint what to check
+
+    // 4) Watchdog hint if nothing rendered
     setTimeout(() => {
-      const html = document.getElementById('content')?.innerHTML || '';
-      if (/Loading/i.test(html)) {
-        document.getElementById('status').textContent = 'Still loading… check config/targets URLs.';
+      const cHTML = (document.getElementById('content') || {}).innerHTML || '';
+      if (/Loading/i.test(cHTML)) {
+        const s = document.getElementById('status');
+        if (s) s.textContent = 'Still loading… check CSV URLs in config.json.';
       }
     }, 6000);
 
+    // 5) Periodic refresh
     setInterval(loop, (CFG.refresh_seconds || 60) * 1000);
+
   } catch (e) {
     fail(e);
   }
@@ -644,22 +647,19 @@ function itemFromCell(cell) {
 }
 
 //read csv into json
-async function loadTargetsWide() {
-  if (!CFG.targets_csv_url) return fetchJSON('targets.json').catch(()=>({defaults:{}, byDate:{}}));
-  const text = await fetchCSV(CFG.targets_csv_url);
+async function loadTargetsWide(csvUrl) {
+  if (!csvUrl) return fetchJSON('targets.json').catch(()=>({defaults:{}, byDate:{}}));
+  const text = await fetchCSV(csvUrl);
   const rows = parseCSVText(text);
-
   const out = { defaults: {}, byDate: {} };
   for (const r of rows) {
     const date = (r.date || '').toLowerCase();
-    // Accept columns p1..p12 (or pA etc.); ignore unknowns
     Object.keys(r).forEach(k => {
-      if (!/^p([0-9]{1,2}|[a-z])$/.test(k)) return;  // only p1.., pA etc.
+      if (!/^p([0-9]{1,2}|[a-z])$/.test(k)) return;
       const cell = r[k];
       if (!cell) return;
       const item = itemFromCell(cell);
       if (!item) return;
-
       if (date === '' || date === 'default') {
         out.defaults[k] = item;
       } else {
@@ -671,6 +671,33 @@ async function loadTargetsWide() {
   return out;
 }
 
+async function loadAnnouncements(csvUrl) {
+  if (!csvUrl) return fetchJSON('announcements.json').catch(()=>({rotation:[], timeRemaining:[]}));
+  const text = await fetchCSV(csvUrl);
+  const rows = parseCSVText(text);
+  const rot = [], trm = [];
+  for (const r of rows) {
+    const kind = (r.kind || '').toLowerCase();
+    const base = { type: (r.type || 'text').toLowerCase() };
+    if (base.type === 'images' && r.folder) base.folder = r.folder;
+    if (base.type === 'slides' && r.url)    base.url = r.url;
+    if (r.durationsec) base.durationSec = +r.durationsec;
+
+    if (kind === 'rotation') {
+      const entry = { ...base };
+      const window = {};
+      if (r.days) window.days = r.days.split('|').map(s=>s.trim()).filter(Boolean);
+      if (r.start && r.end) { window.start = r.start; window.end = r.end; }
+      if (Object.keys(window).length) entry.window = window;
+      rot.push(entry);
+    } else if (kind === 'timeremaining') {
+      const minutesLeft = parseInt(r.minutesleft || r.minutesLeft, 10);
+      if (Number.isFinite(minutesLeft)) trm.push({ minutesLeft, ...base });
+    }
+  }
+  trm.sort((a,b)=>a.minutesLeft-b.minutesLeft);
+  return { rotation: rot, timeRemaining: trm };
+}
 
 
 /* ---------- Utils ---------- */
