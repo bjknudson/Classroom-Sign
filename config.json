@@ -1,6 +1,7 @@
 {
   "timezone": "America/Los_Angeles",
   "ics_proxy_url": "https://sweet-wind-c900.bknudson.workers.dev/ics", 
+  "targets_csv_url": "https://docs.google.com/spreadsheets/d/e/2PACX-1vTPfRO3XcNMK2cgHjqF59NFyzlyWi5SGO-vfmOx1ag3KfVMYc7SGCi7HQzWT_FVG1oL0KuZjnjWva_i/pub?gid=0&single=true&output=csv",
   "event_map": {
     "1st Period": "p1",
     "1st Period (Block)": "p1",
