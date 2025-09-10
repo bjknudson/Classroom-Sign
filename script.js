@@ -310,7 +310,7 @@ function cycleImages(urls, durationSec) {
     i++;
   };
   show();
-  fitContentToStage();
+  //fitContentToStage();
   slideTimer = setInterval(show, (durationSec || 10) * 1000);
 }
 
