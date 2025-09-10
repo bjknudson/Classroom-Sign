@@ -67,7 +67,7 @@ let slideTimer = null;
 
 // Reload when network returns (helps after Wi-Fi blips)
 window.addEventListener('online', () => setTimeout(()=>location.reload(), 3000));
-window.addEventListener('resize', () => fitContentToStage());
+//window.addEventListener('resize', () => fitContentToStage());
 
 // If the tab ever gets hidden and comes back (e.g., HDMI sync), refresh content
 document.addEventListener('visibilitychange', () => {
@@ -260,7 +260,7 @@ function renderItem(item) {
   } else {
     $content.textContent = 'Unsupported item type.';
   }
-  fitContentToStage(0.78); // fills ~78% of stage height
+  //fitContentToStage(0.78); // fills ~78% of stage height
 }
 
 
