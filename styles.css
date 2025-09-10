@@ -42,7 +42,7 @@ html, body {
 #content {
   width: min(var(--maxw), 92vw);
   padding: calc(var(--pad) * var(--scale));
-  font-size: clamp(22px, calc(3.0vw * var(--scale) * var(--auto)), 96px);
+  font-size: clamp(22px, calc(3.0vw * var(--scale) * var(--auto)), 192px);
   line-height: 1.33;
 }
 
