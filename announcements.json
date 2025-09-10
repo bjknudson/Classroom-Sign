@@ -7,6 +7,14 @@
       "durationSec": 8
     }
   ],
+   "rotation": [
+    {
+      "type": "images",
+      "folder": "assets/slides/announcements",   // put your general slides here
+      "durationSec": 8
+      // no "window": this is the default fallback
+    }
+  ],
   "timeRemaining": [
     {
       "minutesLeft": 5,
