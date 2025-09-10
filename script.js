@@ -779,7 +779,7 @@ function mapSummaryToThread(title, eventMap, defaultThread) {
 
 /* --------- adapt to display ---------*/
 
-function fitContentToStage(targetFill = 0.78) {
+function fitContentToStage(targetFill = 0.95) {
   const stage = document.getElementById('stage');
   const content = document.getElementById('content');
   if (!stage || !content) return;
