@@ -10,9 +10,8 @@
    "rotation": [
     {
       "type": "images",
-      "folder": "assets/slides/announcements",   // put your general slides here
+      "folder": "assets/slides/announcements",
       "durationSec": 8
-      // no "window": this is the default fallback
     }
   ],
   "timeRemaining": [
