@@ -30,19 +30,11 @@
       }
     },
     "2025-09-10": {
-      "p2": { "type": "text", "content": "I can carry out a prevention strategy safely and effectively." 
+      "p2": { "type": "text", "content": "I can carry out a prevention <br> strategy safely and effectively." 
       },
-      "p3": {
-        "type": "slides",
-        "url": "https://docs.google.com/presentation/d/e/.../pub?start=false&loop=false&delayms=3000"
+      "p4": { "type": "text", "content": "I can present product concepts with prototypes. <br> I can iterate designs with inexpensive media. <br> I can give Additive Design Feedback." 
       },
-      "p4": {
-        "type": "images",
-        "durationSec": 12,
-        "items": [
-          {"src": "https://yourcdn/img/safety_goggles.png", "caption": "Goggles required."},
-          {"src": "https://yourcdn/img/soldering_tips.png", "caption": "Tin both sides first."}
-        ]
+      "p6": { "type": "text", "content": "I can give and receive ADDITIVE Design Feedback." 
       }
     },
     "2025-09-08": {
