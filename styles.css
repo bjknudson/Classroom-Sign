@@ -17,7 +17,7 @@ body.far { --scale: 3; }      /* try 1.25 or 1.4 for the back row */
 
 /* Optional media: on very large screens, scale up a bit */
 @media (min-width: 1400px) {
-  :root { --scale: 1.1; }
+  :root { --scale: 3; }
 }
 
 html, body {
