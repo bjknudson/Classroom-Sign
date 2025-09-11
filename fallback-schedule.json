@@ -17,7 +17,8 @@
   "Wed": [
     {"start": "08:30", "end": "10:00", "thread": "p2"},
     {"start": "10:10", "end": "11:40", "thread": "p4"},
-    {"start": "12:20", "end": "13:50", "thread": "p6"}
+    {"start": "12:20", "end": "13:50", "thread": "p6"},
+    {"start": "18:00", "end": "17:50", "thread": "p7"}
   ],
   "Thu": [
     {"start": "08:30", "end": "09:20", "thread": "p1"},
