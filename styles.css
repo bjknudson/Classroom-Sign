@@ -1,6 +1,6 @@
 /* === Global tuning === */
 :root {
-  --scale: 2.5;                /* master size knob (1 = normal) */
+  --scale: 3;                /* master size knob (1 = normal) */
   --maxw: 1000px;            /* line length target */
   --pad: 2.2rem;             /* content padding */
   --fg: #ffffff;
@@ -13,7 +13,7 @@
 }
 
 /* optional: boost all sizes at once by adding .far to <body> */
-body.far { --scale: 1.25; }      /* try 1.25 or 1.4 for the back row */
+body.far { --scale: 3; }      /* try 1.25 or 1.4 for the back row */
 
 /* Optional media: on very large screens, scale up a bit */
 @media (min-width: 1400px) {
