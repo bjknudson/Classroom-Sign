@@ -1,7 +1,7 @@
 /* === Global tuning === */
 :root {
   --scale: 2;                /* master size knob (1 = normal) */
-  --maxw: 1000px;            /* line length target */
+  --maxw: 95%;            /* line length target */
   --pad: 2.2rem;             /* content padding */
   --fg: #ffffff;
   --fg-dim: #cfd8dc;
@@ -41,7 +41,7 @@ html, body {
 
 #content {
   width: min(var(--maxw), 92vw);
-  padding: calc(var(--pad) * var(--scale));
+  padding: calc(var(--pad));
   font-size: clamp(22px, calc(3.0vw * var(--scale) * var(--auto)), 192px);
   line-height: 1.33;
 }
