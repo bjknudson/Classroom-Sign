@@ -16,10 +16,10 @@
   ],
   "timeRemaining": [
     {
-      "minutesLeft": 5,
+      "minutesLeft": 10,
       "type": "images",
       "folder": "assets/slides/cleanup",
-      "durationSec": 6
+      "durationSec": 10
     }
   ]
 }
