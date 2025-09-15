@@ -46,13 +46,9 @@
     {"start": "15:05", "end": "15:55", "thread": "p7"} 
   ],
   "Sat": [
-    {"start": "08:30", "end": "23:20", "thread": "p1"}, 
-    {"start": "09:30", "end": "10:20", "thread": "p2"},
-    {"start": "15:05", "end": "15:55", "thread": "p7"} 
+    {"start": "08:30", "end": "8:40", "thread": "p1"}
   ],
   "Sun": [
-    {"start": "08:30", "end": "23:20", "thread": "p1"},  
-    {"start": "09:30", "end": "10:20", "thread": "p2"},
-    {"start": "15:05", "end": "15:55", "thread": "p7"} 
+    {"start": "08:30", "end": "8:40", "thread": "p1"}
   ]
 }
