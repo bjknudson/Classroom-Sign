@@ -9,6 +9,15 @@
     "p7": {"type": "text", "content": "I can collaborate with my peers to learn new skills." },
   },
   "byDate": {
+    "2025-09-29": {
+      "p1": { "type": "text", "content": "I can get here on time and set up." },
+      "p2": { "type": "text", "content": "I can plan and maintain a project timeline." },
+      "p3": { "type": "text", "content": "I can plan and maintain a project timeline. VDE I can communicate in a professional manner with a customer." },
+      "p4": { "type": "text", "content": "I can communicate in a professional manner with a customer." },
+      "p5": { "type": "text", "content": "I can take a break and prepare for the next class." },
+      "p6": { "type": "text", "content": "I can work collaboratively to learn new skills safely."},
+      "p7": { "type": "text", "content": "I can work collaboratively to learn new skills safely."}
+    },
     "2025-09-19": {
       "p1": { "type": "text", "content": "I can get here on time and set up." },
       "p2": { "type": "text", "content": "I can carry out a prevention strategy safely and effectively." },
