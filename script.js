@@ -185,9 +185,51 @@ function showDebug(obj) {
 /* ---------- Content selection ---------- */
 
 function pickTargets(now, thread) {
+  if (!thread) return null;
+
   const ymd = toYMD(now);
-  const day = (TARGETS.byDate && TARGETS.byDate[ymd]) || {};
-  return day[thread] || (TARGETS.defaults && TARGETS.defaults[thread]) || null;
+  const dayMap = CLASS_MAP[ymd] || CLASS_MAP.defaults || {};
+  
+  // 1. Get the class key(s) from the period thread. Default to empty array.
+  // Ensure we get an array, even if the value is a single string (for flexibility).
+  let classKeys = dayMap[thread];
+  if (!classKeys) return null; // No mapping found for this period
+  if (!Array.isArray(classKeys)) {
+      classKeys = [classKeys]; // Convert single string to array
+  }
+
+  const playlistItems = [];
+  const dayTargets = (TARGETS.byDate && TARGETS.byDate[ymd]) || {};
+
+  // 2. Iterate through all class keys for this period and collect their content
+  for (const classKey of classKeys) {
+    // Check daily overrides first, then the default targets
+    let content = dayTargets[classKey] || (TARGETS.defaults && TARGETS.defaults[classKey]) || null;
+    
+    if (content) {
+        // If content is an existing playlist (e.g., 'images' or 'slides'), 
+        // we should embed it as-is. Otherwise, wrap the single item.
+        const item = wrapPlaylist(content); 
+        item.sourceClass = classKey; // For debugging/status display
+        playlistItems.push(item);
+    }
+  }
+
+  if (playlistItems.length === 0) {
+      return null; // No content found for any of the mapped classes
+  }
+  
+  if (playlistItems.length === 1) {
+      // If only one item, return it directly to avoid unnecessary playlist overhead
+      return playlistItems[0];
+  }
+
+  // 3. Return a combined 'playlist' object for rotation
+  return {
+    type: 'playlist',
+    items: playlistItems,
+    durationSec: CFG.playlist_duration_sec || 10 // Use a global default for rotation speed
+  };
 }
 
 function pickRotation(now) {
