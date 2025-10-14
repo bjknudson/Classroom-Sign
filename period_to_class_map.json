@@ -1,0 +1,20 @@
+{
+  "defaults": {
+    "p1": ["DPM"],
+    "p2": ["DPM"],
+    "p3": ["DPM", "2D3D", "VDE2"],
+    "p4": ["VDE1", "VDE2"],
+    "p5": ["Prep"],
+    "p6": ["Intro"],
+    "p7": ["Support"]
+  },
+  "2025-10-13": {
+    "p1": ["Algebra 1", "Geometry"],
+    "p2": ["AP Chemistry"],
+    "p3": ["Planning"],
+    "p4": ["VDE1", "VDE2"],
+    "p5": ["Prep"],
+    "p6": ["Intro"],
+    "p7": ["Support"]
+  }
+}

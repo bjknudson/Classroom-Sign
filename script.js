@@ -45,9 +45,21 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
-let CFG, TARGETS, ANNC;
+let CFG, TARGETS, ANNC, CLASS_MAP;
 let ticker = null;
 let slideTimer = null;
+let playlistTimer = null;
+let renderTokenCounter = 0;
+let currentRenderToken = 0;
+
+function newRenderToken() {
+  renderTokenCounter += 1;
+  return renderTokenCounter;
+}
+
+function setCurrentRenderToken(token) {
+  currentRenderToken = token;
+}
 
 // Periodic hard reload to keep kiosk healthy
 (function setupHardReload(){
@@ -89,13 +101,34 @@ async function init() {
     return; // skip the rest of init()
   }
   try {
-    // Load configs, but don't crash if one is missing.
-    const [cfg, targets, annc] = await Promise.all([
-      fetchJSON('config.json').catch(e => ({ timezone: 'America/Los_Angeles', refresh_seconds: 60 })),
-      fetchJSON('targets.json').catch(e => ({ defaults: {} , byDate: {} })),
-      fetchJSON('announcements.json').catch(e => ({ rotation: [], timeRemaining: [] }))
+    const cfg = await fetchJSON('config.json').catch(() => ({
+      timezone: 'America/Los_Angeles',
+      refresh_seconds: 60,
+      playlist_duration_sec: 10
+    }));
+
+    CFG = cfg;
+    if (typeof CFG.playlist_duration_sec !== 'number' || Number.isNaN(CFG.playlist_duration_sec)) {
+      CFG.playlist_duration_sec = 10;
+    }
+
+    const targetsCsvPromise = cfg.targets_csv_url
+      ? fetchText(cfg.targets_csv_url).catch(e => {
+          console.error('Targets CSV Failed:', e);
+          return '';
+        })
+      : Promise.resolve('');
+
+    const [targetsJson, targetsCsv, annc, classMap] = await Promise.all([
+      fetchJSON('targets.json').catch(() => ({ defaults: {}, byDate: {} })),
+      targetsCsvPromise,
+      fetchJSON('announcements.json').catch(() => ({ rotation: [], timeRemaining: [] })),
+      fetchJSON('period_to_class_map.json').catch(() => ({ defaults: {}, byDate: {} }))
     ]);
-    CFG = cfg; TARGETS = targets; ANNC = annc;
+
+    TARGETS = mergeTargets(targetsJson, parseSimpleTargetsCSV(targetsCsv, CFG));
+    ANNC = annc;
+    CLASS_MAP = normalizeClassMap(classMap);
 
     loop();
     // If nothing rendered in 6s, hint what to check
@@ -185,9 +218,34 @@ function showDebug(obj) {
 /* ---------- Content selection ---------- */
 
 function pickTargets(now, thread) {
+  if (!thread) return null;
+
   const ymd = toYMD(now);
-  const day = (TARGETS.byDate && TARGETS.byDate[ymd]) || {};
-  return day[thread] || (TARGETS.defaults && TARGETS.defaults[thread]) || null;
+  const classEntries = classEntriesForThread(now, thread);
+  const items = [];
+
+  for (const entry of classEntries) {
+    const item = lookupTargetForKey(ymd, entry.key);
+    if (!item) continue;
+    if (entry.label && !item.displayName) item.displayName = entry.label;
+    items.push(item);
+  }
+
+  if (!items.length) {
+    return lookupTargetForKey(ymd, thread);
+  }
+
+  if (items.length === 1) {
+    return items[0];
+  }
+
+  const duration = CFG?.playlist_duration_sec;
+
+  return {
+    type: 'playlist',
+    items,
+    durationSec: typeof duration === 'number' ? duration : undefined
+  };
 }
 
 function pickRotation(now) {
@@ -203,15 +261,117 @@ function pickTimeRemaining(minutesLeft) {
   return match ? wrapPlaylist(match) : null;
 }
 
+function classEntriesForThread(now, thread) {
+  const ymd = toYMD(now);
+  const dayMap = CLASS_MAP?.byDate?.[ymd] || {};
+  const fromDate = normalizeClassEntries(dayMap?.[thread]);
+  const fromDefaults = normalizeClassEntries(CLASS_MAP?.defaults?.[thread]);
+
+  const merged = [];
+  const seenKeys = new Set();
+
+  const appendEntry = (entry) => {
+    if (!entry?.key) return;
+    const key = entry.key;
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+    merged.push(entry);
+  };
+
+  for (const entry of fromDate) appendEntry(entry);
+  if (fromDate.length) {
+    for (const entry of fromDefaults) {
+      if (!entry?.key || seenKeys.has(entry.key)) continue;
+      appendEntry(entry);
+    }
+  } else {
+    for (const entry of fromDefaults) appendEntry(entry);
+  }
+
+  const labeled = merged.map(entry => {
+    if (entry.label || !TARGETS?.displayNames) return entry;
+    const label = TARGETS.displayNames[entry.key];
+    return label ? { ...entry, label } : entry;
+  });
+
+  if (labeled.length) return labeled;
+  const fallbackLabel = TARGETS?.displayNames?.[thread] || null;
+  return [{ key: thread, label: fallbackLabel }];
+}
+
+function normalizeClassEntries(value) {
+  if (!value) return [];
+  const list = Array.isArray(value) ? value : [value];
+  const out = [];
+  for (const entry of list) {
+    if (!entry) continue;
+    if (typeof entry === 'string') {
+      out.push({ key: entry, label: null });
+    } else if (typeof entry === 'object') {
+      const key = entry.key || entry.id || entry.thread;
+      if (!key) continue;
+      out.push({ key, label: entry.label || entry.name || entry.displayName || null });
+    }
+  }
+  return out;
+}
+
+function lookupTargetForKey(ymd, key) {
+  if (!TARGETS) return null;
+  const day = TARGETS.byDate?.[ymd];
+  const fromDay = day?.[key] ? cloneItem(day[key]) : null;
+  if (fromDay) {
+    if (!fromDay.displayName) {
+      const label = TARGETS.displayNames?.[key];
+      if (label) fromDay.displayName = label;
+    }
+    return fromDay;
+  }
+  const fromDefaults = TARGETS.defaults?.[key] ? cloneItem(TARGETS.defaults[key]) : null;
+  if (fromDefaults && !fromDefaults.displayName) {
+    const label = TARGETS.displayNames?.[key];
+    if (label) fromDefaults.displayName = label;
+  }
+  if (fromDefaults) return fromDefaults;
+  return null;
+}
+
 /* ---------- Rendering ---------- */
 
 function renderItem(item) {
   clearTimers();
 
-  if (item.type === 'text') {
-    $content.innerHTML = escapeHTML(item.content).replace(/\n/g, '<br/>');
+  if (!item || typeof item !== 'object') {
+    $content.textContent = 'Unsupported item type.';
+    return;
+  }
 
-  } else if (item.type === 'slides') {
+  const token = newRenderToken();
+  setCurrentRenderToken(token);
+
+  if (item.type === 'playlist') {
+    renderPlaylist(item, token);
+    return;
+  }
+
+  renderSingleItem(item, token);
+  //fitContentToStage(0.78); // fills ~78% of stage height
+}
+
+function renderSingleItem(item, token) {
+  if (!item || typeof item !== 'object') {
+    $content.textContent = 'Unsupported item type.';
+    return;
+  }
+
+  if (item.type === 'text') {
+    const header = item.displayName ? `<div class="playlist-title">${escapeHTML(item.displayName)}</div>` : '';
+    const body = escapeHTML(item.content || '').replace(/\n/g, '<br/>');
+    $content.innerHTML = header + body;
+    return;
+  }
+
+  if (item.type === 'slides') {
     // Try iframe first
     const iframe = document.createElement('iframe');
     iframe.className = 'slides-embed';
@@ -222,10 +382,17 @@ function renderItem(item) {
     let loaded = false;
     iframe.onload = () => { loaded = true; };
     $content.innerHTML = '';
+    if (item.displayName) {
+      const title = document.createElement('div');
+      title.className = 'playlist-title';
+      title.textContent = item.displayName;
+      $content.appendChild(title);
+    }
     $content.appendChild(iframe);
 
     // Fallback to images: scrape published deck for slide IDs
     setTimeout(async () => {
+      if (token !== currentRenderToken) return;
       if (!loaded) {
         try {
           const res = await fetch(item.url, { cache: 'no-store' });
@@ -238,12 +405,21 @@ function renderItem(item) {
           if (uniqueIds.length) {
             let i = 0;
             const show = () => {
+              if (token !== currentRenderToken) return;
               const src = `${item.url.replace(/\/pub.*/, '')}/pub?slide=id.${uniqueIds[i % uniqueIds.length]}`;
-              $content.innerHTML = `<img src="${src}" alt="slide image" style="max-width:100%;height:auto;">`;
+              $content.innerHTML = `${item.displayName ? `<div class="playlist-title">${escapeHTML(item.displayName)}</div>` : ''}` +
+                `<img src="${src}" alt="slide image" style="max-width:100%;height:auto;">`;
               i++;
             };
             show();
-            slideTimer = setInterval(show, (item.durationSec || 10) * 1000);
+            slideTimer = setInterval(() => {
+              if (token !== currentRenderToken) {
+                clearInterval(slideTimer);
+                slideTimer = null;
+                return;
+              }
+              show();
+            }, (item.durationSec || 10) * 1000);
           } else {
             $content.textContent = "No slides found in deck.";
           }
@@ -253,28 +429,113 @@ function renderItem(item) {
         }
       }
     }, 5000);
-
-  } else if (item.type === 'images') {
-    renderImages(item);
-
-  } else {
-    $content.textContent = 'Unsupported item type.';
+    return;
   }
-  //fitContentToStage(0.78); // fills ~78% of stage height
+
+  if (item.type === 'images') {
+    if (item.displayName) {
+      const title = document.createElement('div');
+      title.className = 'playlist-title';
+      title.textContent = item.displayName;
+      $content.innerHTML = '';
+      $content.appendChild(title);
+      const wrapper = document.createElement('div');
+      const wrapperId = `playlist-image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      wrapper.id = wrapperId;
+      $content.appendChild(wrapper);
+      renderImages({ ...item, mountId: wrapperId }, token);
+    } else {
+      renderImages(item, token);
+    }
+    return;
+  }
+
+  $content.textContent = 'Unsupported item type.';
 }
 
 
-async function renderImages(item) {
-  clearTimers();
+function renderPlaylist(item, initialToken) {
+  if (!Array.isArray(item.items) || item.items.length === 0) {
+    $content.textContent = 'No playlist items configured.';
+    return;
+  }
+
+  const flattened = [];
+  for (const raw of item.items) {
+    if (raw && typeof raw === 'object' && raw.type === 'playlist' && Array.isArray(raw.items)) {
+      for (const nested of raw.items) {
+        if (nested && typeof nested === 'object') {
+          flattened.push(cloneItem(nested));
+        }
+      }
+    } else if (raw && typeof raw === 'object') {
+      flattened.push(cloneItem(raw));
+    }
+  }
+
+  if (!flattened.length) {
+    $content.textContent = 'Unsupported playlist items.';
+    return;
+  }
+
+  let index = 0;
+  let nextToken = initialToken ?? newRenderToken();
+
+  const advance = () => {
+    playlistTimer = null;
+    clearTimers({ keepPlaylist: true });
+
+    const next = flattened[index % flattened.length];
+    index += 1;
+    const token = nextToken;
+    nextToken = newRenderToken();
+    setCurrentRenderToken(token);
+
+    if (!next || !next.type) {
+      $content.textContent = 'Unsupported playlist item.';
+    } else {
+      renderSingleItem(next, token);
+    }
+
+    const waitSec = resolvePlaylistDuration(next, item);
+    playlistTimer = setTimeout(advance, waitSec * 1000);
+  };
+
+  advance();
+}
+
+function resolvePlaylistDuration(item, playlist) {
+  if (item && typeof item.durationSec === 'number' && !isNaN(item.durationSec)) {
+    return Math.max(1, item.durationSec);
+  }
+  if (playlist && typeof playlist.durationSec === 'number' && !isNaN(playlist.durationSec)) {
+    return Math.max(1, playlist.durationSec);
+  }
+  if (typeof CFG?.playlist_duration_sec === 'number' && !isNaN(CFG.playlist_duration_sec)) {
+    return Math.max(1, CFG.playlist_duration_sec);
+  }
+  return 10;
+}
+
+
+async function renderImages(item, token) {
+  const mountId = item.mountId || item.containerId;
+  const mount = mountId ? document.getElementById(mountId) : $content;
+  if (!mount) return;
+
+  const showError = (msg) => {
+    if (token != null && token !== currentRenderToken) return;
+    mount.textContent = msg;
+  };
 
   // Case A: explicit list of image objects in targets.json
   if (Array.isArray(item.items) && item.items.length > 0) {
     const urls = item.items.map(it => (typeof it === 'string' ? it : it.src)).filter(Boolean);
     if (urls.length === 0) {
-      $content.textContent = 'No image URLs in items.'; 
+      showError('No image URLs in items.');
       return;
     }
-    cycleImages(urls, item.durationSec);
+    cycleImages(urls, item.durationSec, mount, token);
     return;
   }
 
@@ -283,41 +544,369 @@ async function renderImages(item) {
     try {
       const res = await fetch(`${item.folder}/manifest.json`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`manifest.json not found at ${item.folder}/manifest.json`);
+      if (token != null && token !== currentRenderToken) return;
       const list = await res.json();
+      if (token != null && token !== currentRenderToken) return;
       if (!Array.isArray(list) || list.length === 0) {
         throw new Error(`manifest.json is empty or invalid in ${item.folder}`);
       }
       const urls = list.map(name => `${item.folder}/${name}`);
-      cycleImages(urls, item.durationSec);
+      cycleImages(urls, item.durationSec, mount, token);
       return;
     } catch (err) {
-      $content.textContent = `Error loading images: ${err.message}`;
+      showError(`Error loading images: ${err.message}`);
       console.error(err);
       return;
     }
   }
 
   // Case C: nothing provided
-  $content.textContent = 'No images configured (need "items" or "folder").';
+  showError('No images configured (need "items" or "folder").');
 }
 
 
-function cycleImages(urls, durationSec) {
+function cycleImages(urls, durationSec, mount = $content, token) {
   let i = 0;
   const show = () => {
     const src = urls[i % urls.length];
-    $content.innerHTML = `<img src="${src}" alt="image" style="max-width:100%;height:auto;">`;
+    if (token != null && token !== currentRenderToken) return;
+    mount.innerHTML = `<img src="${src}" alt="image" style="max-width:100%;height:auto;">`;
     i++;
   };
   show();
   //fitContentToStage();
-  slideTimer = setInterval(show, (durationSec || 10) * 1000);
+  slideTimer = setInterval(() => {
+    if (token != null && token !== currentRenderToken) {
+      clearInterval(slideTimer);
+      slideTimer = null;
+      return;
+    }
+    show();
+  }, (durationSec || 10) * 1000);
 }
 
 
+function cloneItem(obj) {
+  return obj ? JSON.parse(JSON.stringify(obj)) : null;
+}
+
 function wrapPlaylist(obj) {
-  // shallow clone to avoid mutating originals
-  return JSON.parse(JSON.stringify(obj));
+  return cloneItem(obj);
+}
+
+function mergeTargets(jsonTargets, csvTargets) {
+  const base = cloneItem(jsonTargets) || {};
+  const merged = {
+    ...base,
+    defaults: { ...(base.defaults || {}) },
+    byDate: {}
+  };
+
+  const baseByDate = base.byDate || {};
+  for (const [dateKey, entries] of Object.entries(baseByDate)) {
+    merged.byDate[dateKey] = { ...entries };
+  }
+
+  if (csvTargets?.defaults) {
+    merged.defaults = { ...merged.defaults, ...csvTargets.defaults };
+  }
+
+  if (csvTargets?.byDate) {
+    for (const [dateKey, entries] of Object.entries(csvTargets.byDate)) {
+      merged.byDate[dateKey] = { ...(merged.byDate[dateKey] || {}), ...entries };
+    }
+  }
+
+  const displayNames = { ...(base.displayNames || {}) };
+  if (csvTargets?.displayNames) {
+    Object.assign(displayNames, csvTargets.displayNames);
+  }
+  if (Object.keys(displayNames).length) {
+    merged.displayNames = displayNames;
+  } else {
+    delete merged.displayNames;
+  }
+
+  if (!Object.keys(merged.byDate).length) {
+    delete merged.byDate;
+  }
+
+  return merged;
+}
+
+function parseSimpleTargetsCSV(csvText, cfg = {}) {
+  const sanitized = (csvText || '').replace(/\ufeff/g, '');
+  if (!sanitized.trim()) return { defaults: {}, byDate: {} };
+
+  const lines = sanitized.split(/\r?\n/).filter(line => line.trim().length > 0);
+  if (lines.length < 2) return { defaults: {}, byDate: {} };
+
+  const delimiter = detectDelimiter(lines[0]);
+  const headerCellsRaw = parseCSVLine(lines[0], delimiter).map(h => h.trim());
+  const headerCells = headerCellsRaw.map(h => h.toLowerCase());
+
+  if (headerCells[0] === 'date') {
+    return parseClassScheduleCSV(lines, delimiter, headerCellsRaw, cfg);
+  }
+
+  return parseLegacyTargetsCSV(lines, delimiter, headerCellsRaw, headerCells, cfg);
+}
+
+function parseClassScheduleCSV(lines, delimiter, headersRaw, cfg) {
+  const classKeys = headersRaw.slice(1).map(h => h.trim()).filter(Boolean);
+  const defaultDuration = typeof cfg.playlist_duration_sec === 'number' ? cfg.playlist_duration_sec : 10;
+  const displayNames = {};
+  const result = { defaults: {}, byDate: {}, displayNames: {} };
+
+  const upsertItems = (dest, values) => {
+    for (let i = 1; i < headersRaw.length; i++) {
+      const key = classKeys[i - 1];
+      if (!key) continue;
+      const cell = (values[i] || '').trim();
+      if (!cell) continue;
+      const item = {
+        type: 'text',
+        content: cell,
+        durationSec: defaultDuration
+      };
+      const label = displayNames[key];
+      if (label) item.displayName = label;
+      dest[key] = item;
+    }
+  };
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCSVLine(lines[i], delimiter);
+    if (!values.length) continue;
+    while (values.length < headersRaw.length) values.push('');
+
+    const first = (values[0] || '').trim();
+    const firstLower = first.toLowerCase();
+
+    if (!first || firstLower === 'display name' || firstLower === 'display names') {
+      for (let j = 1; j < headersRaw.length; j++) {
+        const key = classKeys[j - 1];
+        if (!key) continue;
+        const label = (values[j] || '').trim();
+        if (label) {
+          displayNames[key] = label;
+        }
+      }
+      continue;
+    }
+
+    if (firstLower === 'default' || firstLower === 'defaults') {
+      upsertItems(result.defaults, values);
+      continue;
+    }
+
+    const dateKey = normalizeDateKey(first);
+    if (!dateKey) continue;
+    if (!result.byDate[dateKey]) result.byDate[dateKey] = {};
+    upsertItems(result.byDate[dateKey], values);
+  }
+
+  if (Object.keys(displayNames).length) {
+    const applyLabels = dest => {
+      if (!dest) return;
+      for (const [key, item] of Object.entries(dest)) {
+        if (item && typeof item === 'object' && !item.displayName && displayNames[key]) {
+          item.displayName = displayNames[key];
+        }
+      }
+    };
+    applyLabels(result.defaults);
+    for (const dateKey of Object.keys(result.byDate || {})) {
+      applyLabels(result.byDate[dateKey]);
+    }
+  }
+
+  if (Object.keys(displayNames).length) {
+    result.displayNames = displayNames;
+  } else {
+    delete result.displayNames;
+  }
+
+  if (!Object.keys(result.defaults).length) delete result.defaults;
+  if (!Object.keys(result.byDate).length) delete result.byDate;
+
+  return result;
+}
+
+function parseLegacyTargetsCSV(lines, delimiter, headersRaw, headersLower, cfg) {
+  const indexOf = (...names) => {
+    for (const name of names) {
+      const idx = headersLower.indexOf(name.toLowerCase());
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  };
+
+  const idxKey = indexOf('classkey', 'key', 'thread');
+  const idxDisplay = indexOf('displayname', 'display name', 'name');
+  const idxType = indexOf('contenttype', 'type');
+  const idxUrl = indexOf('contenturl', 'url');
+  const idxText = indexOf('contenttext', 'text', 'content');
+  const idxDuration = indexOf('durationsec', 'duration');
+  const idxDate = indexOf('date', 'day', 'effective', 'ymd');
+
+  const result = { defaults: {}, byDate: {} };
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCSVLine(lines[i], delimiter);
+    if (idxKey === -1 || idxType === -1 || !values.length) continue;
+
+    const key = (values[idxKey] || '').trim();
+    if (!key) continue;
+
+    const type = (values[idxType] || '').trim().toLowerCase();
+    if (!type) continue;
+
+    const displayName = idxDisplay !== -1 ? (values[idxDisplay] || '').trim() : '';
+    const duration = idxDuration !== -1 ? parseInt((values[idxDuration] || '').trim(), 10) : NaN;
+    const resolvedDuration = !isNaN(duration)
+      ? duration
+      : (typeof cfg.playlist_duration_sec === 'number' ? cfg.playlist_duration_sec : 10);
+
+    const item = { type, durationSec: resolvedDuration };
+    if (displayName) item.displayName = displayName;
+
+    const textValue = idxText !== -1 ? (values[idxText] || '').trim() : '';
+    const urlValue = idxUrl !== -1 ? (values[idxUrl] || '').trim() : '';
+
+    if (type === 'text') {
+      item.content = textValue || urlValue;
+    } else if (type === 'slides') {
+      item.url = urlValue || textValue;
+    } else if (type === 'images') {
+      if (urlValue.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(urlValue);
+          if (Array.isArray(parsed)) item.items = parsed;
+        } catch (err) {
+          console.warn('Unable to parse images JSON for', key, err);
+        }
+      }
+      if (!item.items?.length) {
+        const parts = urlValue.split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
+        if (parts.length > 1) {
+          item.items = parts.map(src => ({ src }));
+        } else if (parts.length === 1) {
+          item.folder = parts[0];
+        } else if (textValue) {
+          item.folder = textValue;
+        }
+      }
+    } else if (type === 'playlist') {
+      const raw = textValue || urlValue;
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) item.items = parsed;
+        } catch (err) {
+          console.warn('Unable to parse playlist JSON for', key, err);
+        }
+      }
+    } else {
+      continue;
+    }
+
+    if (type === 'text' && !item.content) continue;
+    if ((type === 'slides' || type === 'images') && !item.url && !item.folder && !item.items) continue;
+
+    const dateValue = idxDate !== -1 ? normalizeDateKey(values[idxDate]) : null;
+    if (dateValue) {
+      if (!result.byDate[dateValue]) result.byDate[dateValue] = {};
+      result.byDate[dateValue][key] = item;
+    } else {
+      result.defaults[key] = item;
+    }
+  }
+
+  if (!Object.keys(result.byDate).length) delete result.byDate;
+
+  return result;
+}
+
+function parseCSVLine(line, delimiter = ',') {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delimiter) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+function detectDelimiter(line) {
+  const commaCount = (line.match(/,/g) || []).length;
+  const tabCount = (line.match(/\t/g) || []).length;
+  return tabCount > commaCount ? '\t' : ',';
+}
+
+function normalizeClassMap(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return { defaults: {}, byDate: {} };
+  }
+
+  const result = { defaults: {}, byDate: {} };
+
+  if (raw.defaults && typeof raw.defaults === 'object') {
+    for (const [thread, value] of Object.entries(raw.defaults)) {
+      result.defaults[thread] = cloneItem(value);
+    }
+  }
+
+  if (raw.byDate && typeof raw.byDate === 'object') {
+    for (const [dateKey, value] of Object.entries(raw.byDate)) {
+      const normalizedKey = normalizeDateKey(dateKey);
+      if (!normalizedKey) continue;
+      result.byDate[normalizedKey] = cloneItem(value);
+    }
+  }
+
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === 'defaults' || key === 'byDate') continue;
+    const normalizedKey = normalizeDateKey(key);
+    if (!normalizedKey) continue;
+    result.byDate[normalizedKey] = cloneItem(value);
+  }
+
+  if (!Object.keys(result.defaults).length) delete result.defaults;
+  if (!Object.keys(result.byDate).length) delete result.byDate;
+
+  return result;
+}
+
+function normalizeDateKey(value) {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, '0');
+  const d = String(parsed.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 /* ---------- Calendar handling ---------- */
@@ -808,5 +1397,10 @@ function icsUrlWithCacheBust(url){ const u=new URL(url); u.searchParams.set('t',
 function formatNow(d, tz){ return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} ${tz ? '('+tz+')' : ''}`; }
 function formatNowNoTZ(d) { return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour: '2-digit',minute: '2-digit'})}`;}
 function escapeHTML(s){ return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
-function clearTimers(){ if (ticker) { clearInterval(ticker); ticker=null; } if (slideTimer){ clearInterval(slideTimer); slideTimer=null; } }
+function clearTimers(options = {}) {
+  const { keepPlaylist = false } = options;
+  if (ticker) { clearInterval(ticker); ticker = null; }
+  if (slideTimer) { clearInterval(slideTimer); slideTimer = null; }
+  if (!keepPlaylist && playlistTimer) { clearTimeout(playlistTimer); playlistTimer = null; }
+}
 function fail(e){ $content.textContent='Error loading display.'; $status.textContent = (e && e.message) ? e.message : 'Unknown error'; }
