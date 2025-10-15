@@ -658,19 +658,158 @@ function parseClassScheduleCSV(lines, delimiter, headersRaw, cfg) {
   const displayNames = {};
   const result = { defaults: {}, byDate: {}, displayNames: {} };
 
+  const interpretCell = (raw) => {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return null;
+
+    const baseItem = {
+      type: 'text',
+      content: trimmed,
+      durationSec: defaultDuration
+    };
+
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx <= 0) {
+      return baseItem;
+    }
+
+    const left = trimmed.slice(0, colonIdx).trim();
+    const right = trimmed.slice(colonIdx + 1).trim();
+    if (!left) {
+      return baseItem;
+    }
+
+    const segments = left.split('|').map(s => s.trim()).filter(Boolean);
+    if (!segments.length) {
+      return baseItem;
+    }
+
+    const type = segments.shift().toLowerCase();
+    if (!['text', 'slides', 'images', 'playlist'].includes(type)) {
+      return baseItem;
+    }
+
+    const opts = {};
+    for (const segment of segments) {
+      const eqIdx = segment.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = segment.slice(0, eqIdx).trim().toLowerCase();
+      const value = segment.slice(eqIdx + 1).trim();
+      if (!key || !value) continue;
+      opts[key] = value;
+    }
+
+    const item = { type };
+
+    const durationOpt = opts.duration || opts.d || opts.sec || opts.seconds;
+    if (durationOpt) {
+      const parsed = parseInt(durationOpt, 10);
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        item.durationSec = parsed;
+      }
+    }
+
+    if (!item.durationSec) {
+      item.durationSec = defaultDuration;
+    }
+
+    const labelOpt = opts.label || opts.name || opts.displayname;
+    if (labelOpt) {
+      item.displayName = labelOpt;
+    }
+
+    if (type === 'text') {
+      item.content = right || trimmed;
+      return item.content ? item : null;
+    }
+
+    if (type === 'slides') {
+      item.url = right;
+      return item.url ? item : null;
+    }
+
+    if (type === 'images') {
+      if (opts.folder) {
+        item.folder = opts.folder;
+      }
+
+      const payload = right;
+      if (payload) {
+        if (payload.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(payload);
+            if (Array.isArray(parsed) && parsed.length) {
+              item.items = parsed;
+            }
+          } catch (err) {
+            console.warn('Unable to parse images JSON from compact CSV cell', err);
+          }
+        }
+        if (!item.items?.length) {
+          const parts = payload.split(/[\n;,]+/).map(s => s.trim()).filter(Boolean);
+          if (parts.length > 1) {
+            item.items = parts.map(src => ({ src }));
+          } else if (parts.length === 1) {
+            const single = parts[0];
+            if (!item.folder) {
+              // Treat a single entry as a folder by default for parity with legacy CSV parsing.
+              item.folder = single;
+            } else {
+              // Folder already provided via opts; interpret the single value as a direct image.
+              item.items = [{ src: single }];
+            }
+          }
+        }
+      }
+
+      if (opts.items && !item.items?.length) {
+        try {
+          const parsed = JSON.parse(opts.items);
+          if (Array.isArray(parsed) && parsed.length) {
+            item.items = parsed;
+          }
+        } catch (err) {
+          console.warn('Unable to parse images items JSON from compact CSV options', err);
+        }
+      }
+
+      if (!item.folder && !item.items?.length) {
+        return null;
+      }
+      return item;
+    }
+
+    if (type === 'playlist') {
+      const payload = right;
+      if (!payload) return null;
+      try {
+        const parsed = JSON.parse(payload);
+        if (Array.isArray(parsed) && parsed.length) {
+          item.items = parsed;
+          return item;
+        }
+      } catch (err) {
+        console.warn('Unable to parse playlist JSON from compact CSV cell', err);
+      }
+      return null;
+    }
+
+    return baseItem;
+  };
+
   const upsertItems = (dest, values) => {
     for (let i = 1; i < headersRaw.length; i++) {
       const key = classKeys[i - 1];
       if (!key) continue;
-      const cell = (values[i] || '').trim();
-      if (!cell) continue;
-      const item = {
-        type: 'text',
-        content: cell,
-        durationSec: defaultDuration
-      };
-      const label = displayNames[key];
-      if (label) item.displayName = label;
+      const cell = values[i];
+      const item = interpretCell(cell);
+      if (!item) continue;
+      if (!item.durationSec || Number.isNaN(item.durationSec)) {
+        item.durationSec = defaultDuration;
+      }
+      if (!item.displayName && displayNames[key]) {
+        item.displayName = displayNames[key];
+      }
       dest[key] = item;
     }
   };
