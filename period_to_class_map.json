@@ -1,17 +1,20 @@
 {
-  // Daily Override example
-  "2025-10-13": {
-    "p1": ["Algebra 1", "Geometry"], // P1 content should rotate between these two class LTs
-    "p2": ["AP Chemistry"],
-    "p3": ["Planning"]
-  },
-  // Default Schedule
   "defaults": {
-    "p1": [""],
+    "p1": ["None"],
     "p2": ["DPM"],
-    "p3": ["DPM","2D3D","VDE2"],
-    "p4": ["VDE1", "VDE2"], 
+    "p3": ["DPM", "2D3D", "VDE2"],
+    "p4": ["VDE1", "VDE2"],
     "p5": ["Prep"],
-    "p6": ["Intro"], 
-    "p7
+    "p6": ["INTRO"],
+    "p7": ["INTRO"]
+  },
+  "2025-10-13": {
+    "p1": ["None"],
+    "p2": ["DPM"],
+    "p3": ["DPM", "2D3D", "VDE2"],
+    "p4": ["VDE1", "VDE2"],
+    "p5": ["Prep"],
+    "p6": ["INTRO"],
+    "p7": ["INTRO"]
+  }
 }

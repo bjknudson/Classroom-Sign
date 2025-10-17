@@ -45,9 +45,30 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
-let CFG, TARGETS, ANNC;
+let CFG, TARGETS, ANNC, CLASS_MAP;
 let ticker = null;
 let slideTimer = null;
+let playlistTimer = null;
+let renderTokenCounter = 0;
+let currentRenderToken = 0;
+
+const calendarHealth = {
+  lastAttempt: null,
+  lastAttemptUrl: null,
+  lastSuccess: null,
+  lastSuccessUrl: null,
+  lastCount: 0,
+  lastError: null
+};
+
+function newRenderToken() {
+  renderTokenCounter += 1;
+  return renderTokenCounter;
+}
+
+function setCurrentRenderToken(token) {
+  currentRenderToken = token;
+}
 
 // Periodic hard reload to keep kiosk healthy
 (function setupHardReload(){
@@ -89,13 +110,34 @@ async function init() {
     return; // skip the rest of init()
   }
   try {
-    // Load configs, but don't crash if one is missing.
-    const [cfg, targets, annc] = await Promise.all([
-      fetchJSON('config.json').catch(e => ({ timezone: 'America/Los_Angeles', refresh_seconds: 60 })),
-      fetchJSON('targets.json').catch(e => ({ defaults: {} , byDate: {} })),
-      fetchJSON('announcements.json').catch(e => ({ rotation: [], timeRemaining: [] }))
+    const cfg = await fetchJSON('config.json').catch(() => ({
+      timezone: 'America/Los_Angeles',
+      refresh_seconds: 60,
+      playlist_duration_sec: 10
+    }));
+
+    CFG = cfg;
+    if (typeof CFG.playlist_duration_sec !== 'number' || Number.isNaN(CFG.playlist_duration_sec)) {
+      CFG.playlist_duration_sec = 10;
+    }
+
+    const targetsCsvPromise = cfg.targets_csv_url
+      ? fetchText(cfg.targets_csv_url).catch(e => {
+          console.error('Targets CSV Failed:', e);
+          return '';
+        })
+      : Promise.resolve('');
+
+    const [targetsJson, targetsCsv, annc, classMap] = await Promise.all([
+      fetchJSON('targets.json').catch(() => ({ defaults: {}, byDate: {} })),
+      targetsCsvPromise,
+      fetchJSON('announcements.json').catch(() => ({ rotation: [], timeRemaining: [] })),
+      fetchJSON('period_to_class_map.json').catch(() => ({ defaults: {}, byDate: {} }))
     ]);
-    CFG = cfg; TARGETS = targets; ANNC = annc;
+
+    TARGETS = mergeTargets(targetsJson, parseSimpleTargetsCSV(targetsCsv, CFG));
+    ANNC = annc;
+    CLASS_MAP = normalizeClassMap(classMap);
 
     loop();
     // If nothing rendered in 6s, hint what to check
@@ -129,6 +171,11 @@ async function loop() {
 
     const threadInfo = await currentThread(now); // {thread,start,end,summary}
     const minutesLeft = threadInfo.end ? Math.ceil((threadInfo.end - now) / 60000) : null;
+    const lookedAt = threadInfo.debug?.lookedAt || [];
+    const hasSuccessProbe = lookedAt.some(entry => entry && typeof entry.count === 'number');
+    const hasErrorProbe = lookedAt.some(entry => entry && entry.error);
+    const calendarError = threadInfo.debug?.reason === 'calendar-fetch-error'
+      || (!hasSuccessProbe && hasErrorProbe);
 
     let picked = null;
     let pickedReason = '';
@@ -148,23 +195,35 @@ async function loop() {
 
     if (picked) {
       renderItem(picked);
-      $status.textContent = pickedReason.includes('targets')
+      let statusText = pickedReason.includes('targets')
         ? `In-class • ${threadInfo.thread?.toUpperCase()}`
         : pickedReason;
+      if (calendarError) {
+        statusText += ' • Calendar fetch error';
+      }
+      $status.textContent = statusText;
     } else {
-      $content.textContent = 'No content scheduled.';
-      $status.textContent = 'Idle';
+      if (calendarError) {
+        if (!$content.textContent) {
+          $content.textContent = 'Calendar unavailable.';
+        }
+        $status.textContent = 'Calendar fetch error';
+      } else {
+        $content.textContent = 'No content scheduled.';
+        $status.textContent = 'Idle';
+      }
     }
 
     showDebug({
-    now: formatNowNoTZ(now),
-    eventSummary: threadInfo.summary || '(none)',
-    mappedThread: threadInfo.thread || '(none)',
-    start: threadInfo.start ? threadInfo.start.toString() : null,
-    end: threadInfo.end ? threadInfo.end.toString() : null,
-    reason: threadInfo.debug?.reason || '(n/a)',
-    lookedAt: threadInfo.debug?.lookedAt || [],
-    nextEvent: threadInfo.debug?.nextEvent || null
+      now: formatNowNoTZ(now),
+      eventSummary: threadInfo.summary || '(none)',
+      mappedThread: threadInfo.thread || '(none)',
+      start: threadInfo.start ? threadInfo.start.toString() : null,
+      end: threadInfo.end ? threadInfo.end.toString() : null,
+      reason: threadInfo.debug?.reason || '(n/a)',
+      lookedAt: threadInfo.debug?.lookedAt || [],
+      nextEvent: threadInfo.debug?.nextEvent || null,
+      calendarHealth
     });
 
   } catch (e) {
@@ -188,47 +247,30 @@ function pickTargets(now, thread) {
   if (!thread) return null;
 
   const ymd = toYMD(now);
-  const dayMap = CLASS_MAP[ymd] || CLASS_MAP.defaults || {};
-  
-  // 1. Get the class key(s) from the period thread. Default to empty array.
-  // Ensure we get an array, even if the value is a single string (for flexibility).
-  let classKeys = dayMap[thread];
-  if (!classKeys) return null; // No mapping found for this period
-  if (!Array.isArray(classKeys)) {
-      classKeys = [classKeys]; // Convert single string to array
+  const classEntries = classEntriesForThread(now, thread);
+  const items = [];
+
+  for (const entry of classEntries) {
+    const item = lookupTargetForKey(ymd, entry.key);
+    if (!item) continue;
+    if (entry.label && !item.displayName) item.displayName = entry.label;
+    items.push(item);
   }
 
-  const playlistItems = [];
-  const dayTargets = (TARGETS.byDate && TARGETS.byDate[ymd]) || {};
-
-  // 2. Iterate through all class keys for this period and collect their content
-  for (const classKey of classKeys) {
-    // Check daily overrides first, then the default targets
-    let content = dayTargets[classKey] || (TARGETS.defaults && TARGETS.defaults[classKey]) || null;
-    
-    if (content) {
-        // If content is an existing playlist (e.g., 'images' or 'slides'), 
-        // we should embed it as-is. Otherwise, wrap the single item.
-        const item = wrapPlaylist(content); 
-        item.sourceClass = classKey; // For debugging/status display
-        playlistItems.push(item);
-    }
+  if (!items.length) {
+    return lookupTargetForKey(ymd, thread);
   }
 
-  if (playlistItems.length === 0) {
-      return null; // No content found for any of the mapped classes
-  }
-  
-  if (playlistItems.length === 1) {
-      // If only one item, return it directly to avoid unnecessary playlist overhead
-      return playlistItems[0];
+  if (items.length === 1) {
+    return items[0];
   }
 
-  // 3. Return a combined 'playlist' object for rotation
+  const duration = CFG?.playlist_duration_sec;
+
   return {
     type: 'playlist',
-    items: playlistItems,
-    durationSec: CFG.playlist_duration_sec || 10 // Use a global default for rotation speed
+    items,
+    durationSec: typeof duration === 'number' ? duration : undefined
   };
 }
 
@@ -245,15 +287,117 @@ function pickTimeRemaining(minutesLeft) {
   return match ? wrapPlaylist(match) : null;
 }
 
+function classEntriesForThread(now, thread) {
+  const ymd = toYMD(now);
+  const dayMap = CLASS_MAP?.byDate?.[ymd] || {};
+  const fromDate = normalizeClassEntries(dayMap?.[thread]);
+  const fromDefaults = normalizeClassEntries(CLASS_MAP?.defaults?.[thread]);
+
+  const merged = [];
+  const seenKeys = new Set();
+
+  const appendEntry = (entry) => {
+    if (!entry?.key) return;
+    const key = entry.key;
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+    merged.push(entry);
+  };
+
+  for (const entry of fromDate) appendEntry(entry);
+  if (fromDate.length) {
+    for (const entry of fromDefaults) {
+      if (!entry?.key || seenKeys.has(entry.key)) continue;
+      appendEntry(entry);
+    }
+  } else {
+    for (const entry of fromDefaults) appendEntry(entry);
+  }
+
+  const labeled = merged.map(entry => {
+    if (entry.label || !TARGETS?.displayNames) return entry;
+    const label = TARGETS.displayNames[entry.key];
+    return label ? { ...entry, label } : entry;
+  });
+
+  if (labeled.length) return labeled;
+  const fallbackLabel = TARGETS?.displayNames?.[thread] || null;
+  return [{ key: thread, label: fallbackLabel }];
+}
+
+function normalizeClassEntries(value) {
+  if (!value) return [];
+  const list = Array.isArray(value) ? value : [value];
+  const out = [];
+  for (const entry of list) {
+    if (!entry) continue;
+    if (typeof entry === 'string') {
+      out.push({ key: entry, label: null });
+    } else if (typeof entry === 'object') {
+      const key = entry.key || entry.id || entry.thread;
+      if (!key) continue;
+      out.push({ key, label: entry.label || entry.name || entry.displayName || null });
+    }
+  }
+  return out;
+}
+
+function lookupTargetForKey(ymd, key) {
+  if (!TARGETS) return null;
+  const day = TARGETS.byDate?.[ymd];
+  const fromDay = day?.[key] ? cloneItem(day[key]) : null;
+  if (fromDay) {
+    if (!fromDay.displayName) {
+      const label = TARGETS.displayNames?.[key];
+      if (label) fromDay.displayName = label;
+    }
+    return fromDay;
+  }
+  const fromDefaults = TARGETS.defaults?.[key] ? cloneItem(TARGETS.defaults[key]) : null;
+  if (fromDefaults && !fromDefaults.displayName) {
+    const label = TARGETS.displayNames?.[key];
+    if (label) fromDefaults.displayName = label;
+  }
+  if (fromDefaults) return fromDefaults;
+  return null;
+}
+
 /* ---------- Rendering ---------- */
 
 function renderItem(item) {
   clearTimers();
 
-  if (item.type === 'text') {
-    $content.innerHTML = escapeHTML(item.content).replace(/\n/g, '<br/>');
+  if (!item || typeof item !== 'object') {
+    $content.textContent = 'Unsupported item type.';
+    return;
+  }
 
-  } else if (item.type === 'slides') {
+  const token = newRenderToken();
+  setCurrentRenderToken(token);
+
+  if (item.type === 'playlist') {
+    renderPlaylist(item, token);
+    return;
+  }
+
+  renderSingleItem(item, token);
+  //fitContentToStage(0.78); // fills ~78% of stage height
+}
+
+function renderSingleItem(item, token) {
+  if (!item || typeof item !== 'object') {
+    $content.textContent = 'Unsupported item type.';
+    return;
+  }
+
+  if (item.type === 'text') {
+    const header = item.displayName ? `<div class="playlist-title">${escapeHTML(item.displayName)}</div>` : '';
+    const body = escapeHTML(item.content || '').replace(/\n/g, '<br/>');
+    $content.innerHTML = header + body;
+    return;
+  }
+
+  if (item.type === 'slides') {
     // Try iframe first
     const iframe = document.createElement('iframe');
     iframe.className = 'slides-embed';
@@ -264,10 +408,17 @@ function renderItem(item) {
     let loaded = false;
     iframe.onload = () => { loaded = true; };
     $content.innerHTML = '';
+    if (item.displayName) {
+      const title = document.createElement('div');
+      title.className = 'playlist-title';
+      title.textContent = item.displayName;
+      $content.appendChild(title);
+    }
     $content.appendChild(iframe);
 
     // Fallback to images: scrape published deck for slide IDs
     setTimeout(async () => {
+      if (token !== currentRenderToken) return;
       if (!loaded) {
         try {
           const res = await fetch(item.url, { cache: 'no-store' });
@@ -280,12 +431,21 @@ function renderItem(item) {
           if (uniqueIds.length) {
             let i = 0;
             const show = () => {
+              if (token !== currentRenderToken) return;
               const src = `${item.url.replace(/\/pub.*/, '')}/pub?slide=id.${uniqueIds[i % uniqueIds.length]}`;
-              $content.innerHTML = `<img src="${src}" alt="slide image" style="max-width:100%;height:auto;">`;
+              $content.innerHTML = `${item.displayName ? `<div class="playlist-title">${escapeHTML(item.displayName)}</div>` : ''}` +
+                `<img src="${src}" alt="slide image" style="max-width:100%;height:auto;">`;
               i++;
             };
             show();
-            slideTimer = setInterval(show, (item.durationSec || 10) * 1000);
+            slideTimer = setInterval(() => {
+              if (token !== currentRenderToken) {
+                clearInterval(slideTimer);
+                slideTimer = null;
+                return;
+              }
+              show();
+            }, (item.durationSec || 10) * 1000);
           } else {
             $content.textContent = "No slides found in deck.";
           }
@@ -295,31 +455,113 @@ function renderItem(item) {
         }
       }
     }, 5000);
-
-  } else if (item.type === 'images') {
-    renderImages(item);
-  
-  } else if (item.type === 'playlist') { // <-- NEW playlist handler
-    renderPlaylist(item);
- 
-  } else {
-    $content.textContent = 'Unsupported item type.';
+    return;
   }
-  //fitContentToStage(0.78); // fills ~78% of stage height
+
+  if (item.type === 'images') {
+    if (item.displayName) {
+      const title = document.createElement('div');
+      title.className = 'playlist-title';
+      title.textContent = item.displayName;
+      $content.innerHTML = '';
+      $content.appendChild(title);
+      const wrapper = document.createElement('div');
+      const wrapperId = `playlist-image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      wrapper.id = wrapperId;
+      $content.appendChild(wrapper);
+      renderImages({ ...item, mountId: wrapperId }, token);
+    } else {
+      renderImages(item, token);
+    }
+    return;
+  }
+
+  $content.textContent = 'Unsupported item type.';
 }
 
 
-async function renderImages(item) {
-  clearTimers();
+function renderPlaylist(item, initialToken) {
+  if (!Array.isArray(item.items) || item.items.length === 0) {
+    $content.textContent = 'No playlist items configured.';
+    return;
+  }
+
+  const flattened = [];
+  for (const raw of item.items) {
+    if (raw && typeof raw === 'object' && raw.type === 'playlist' && Array.isArray(raw.items)) {
+      for (const nested of raw.items) {
+        if (nested && typeof nested === 'object') {
+          flattened.push(cloneItem(nested));
+        }
+      }
+    } else if (raw && typeof raw === 'object') {
+      flattened.push(cloneItem(raw));
+    }
+  }
+
+  if (!flattened.length) {
+    $content.textContent = 'Unsupported playlist items.';
+    return;
+  }
+
+  let index = 0;
+  let nextToken = initialToken ?? newRenderToken();
+
+  const advance = () => {
+    playlistTimer = null;
+    clearTimers({ keepPlaylist: true });
+
+    const next = flattened[index % flattened.length];
+    index += 1;
+    const token = nextToken;
+    nextToken = newRenderToken();
+    setCurrentRenderToken(token);
+
+    if (!next || !next.type) {
+      $content.textContent = 'Unsupported playlist item.';
+    } else {
+      renderSingleItem(next, token);
+    }
+
+    const waitSec = resolvePlaylistDuration(next, item);
+    playlistTimer = setTimeout(advance, waitSec * 1000);
+  };
+
+  advance();
+}
+
+function resolvePlaylistDuration(item, playlist) {
+  if (item && typeof item.durationSec === 'number' && !isNaN(item.durationSec)) {
+    return Math.max(1, item.durationSec);
+  }
+  if (playlist && typeof playlist.durationSec === 'number' && !isNaN(playlist.durationSec)) {
+    return Math.max(1, playlist.durationSec);
+  }
+  if (typeof CFG?.playlist_duration_sec === 'number' && !isNaN(CFG.playlist_duration_sec)) {
+    return Math.max(1, CFG.playlist_duration_sec);
+  }
+  return 10;
+}
+
+
+async function renderImages(item, token) {
+  const mountId = item.mountId || item.containerId;
+  const mount = mountId ? document.getElementById(mountId) : $content;
+  if (!mount) return;
+
+  const showError = (msg) => {
+    if (token != null && token !== currentRenderToken) return;
+    mount.textContent = msg;
+  };
 
   // Case A: explicit list of image objects in targets.json
   if (Array.isArray(item.items) && item.items.length > 0) {
     const urls = item.items.map(it => (typeof it === 'string' ? it : it.src)).filter(Boolean);
     if (urls.length === 0) {
-      $content.textContent = 'No image URLs in items.'; 
+      showError('No image URLs in items.');
       return;
     }
-    cycleImages(urls, item.durationSec);
+    cycleImages(urls, item.durationSec, mount, token);
     return;
   }
 
@@ -328,41 +570,508 @@ async function renderImages(item) {
     try {
       const res = await fetch(`${item.folder}/manifest.json`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`manifest.json not found at ${item.folder}/manifest.json`);
+      if (token != null && token !== currentRenderToken) return;
       const list = await res.json();
+      if (token != null && token !== currentRenderToken) return;
       if (!Array.isArray(list) || list.length === 0) {
         throw new Error(`manifest.json is empty or invalid in ${item.folder}`);
       }
       const urls = list.map(name => `${item.folder}/${name}`);
-      cycleImages(urls, item.durationSec);
+      cycleImages(urls, item.durationSec, mount, token);
       return;
     } catch (err) {
-      $content.textContent = `Error loading images: ${err.message}`;
+      showError(`Error loading images: ${err.message}`);
       console.error(err);
       return;
     }
   }
 
   // Case C: nothing provided
-  $content.textContent = 'No images configured (need "items" or "folder").';
+  showError('No images configured (need "items" or "folder").');
 }
 
 
-function cycleImages(urls, durationSec) {
+function cycleImages(urls, durationSec, mount = $content, token) {
   let i = 0;
   const show = () => {
     const src = urls[i % urls.length];
-    $content.innerHTML = `<img src="${src}" alt="image" style="max-width:100%;height:auto;">`;
+    if (token != null && token !== currentRenderToken) return;
+    mount.innerHTML = `<img src="${src}" alt="image" style="max-width:100%;height:auto;">`;
     i++;
   };
   show();
   //fitContentToStage();
-  slideTimer = setInterval(show, (durationSec || 10) * 1000);
+  slideTimer = setInterval(() => {
+    if (token != null && token !== currentRenderToken) {
+      clearInterval(slideTimer);
+      slideTimer = null;
+      return;
+    }
+    show();
+  }, (durationSec || 10) * 1000);
 }
 
 
+function cloneItem(obj) {
+  return obj ? JSON.parse(JSON.stringify(obj)) : null;
+}
+
 function wrapPlaylist(obj) {
-  // shallow clone to avoid mutating originals
-  return JSON.parse(JSON.stringify(obj));
+  return cloneItem(obj);
+}
+
+function mergeTargets(jsonTargets, csvTargets) {
+  const base = cloneItem(jsonTargets) || {};
+  const merged = {
+    ...base,
+    defaults: { ...(base.defaults || {}) },
+    byDate: {}
+  };
+
+  const baseByDate = base.byDate || {};
+  for (const [dateKey, entries] of Object.entries(baseByDate)) {
+    merged.byDate[dateKey] = { ...entries };
+  }
+
+  if (csvTargets?.defaults) {
+    merged.defaults = { ...merged.defaults, ...csvTargets.defaults };
+  }
+
+  if (csvTargets?.byDate) {
+    for (const [dateKey, entries] of Object.entries(csvTargets.byDate)) {
+      merged.byDate[dateKey] = { ...(merged.byDate[dateKey] || {}), ...entries };
+    }
+  }
+
+  const displayNames = { ...(base.displayNames || {}) };
+  if (csvTargets?.displayNames) {
+    Object.assign(displayNames, csvTargets.displayNames);
+  }
+  if (Object.keys(displayNames).length) {
+    merged.displayNames = displayNames;
+  } else {
+    delete merged.displayNames;
+  }
+
+  if (!Object.keys(merged.byDate).length) {
+    delete merged.byDate;
+  }
+
+  return merged;
+}
+
+function parseSimpleTargetsCSV(csvText, cfg = {}) {
+  const sanitized = (csvText || '').replace(/\ufeff/g, '');
+  if (!sanitized.trim()) return { defaults: {}, byDate: {} };
+
+  const lines = sanitized.split(/\r?\n/).filter(line => line.trim().length > 0);
+  if (lines.length < 2) return { defaults: {}, byDate: {} };
+
+  const delimiter = detectDelimiter(lines[0]);
+  const headerCellsRaw = parseCSVLine(lines[0], delimiter).map(h => h.trim());
+  const headerCells = headerCellsRaw.map(h => h.toLowerCase());
+
+  if (headerCells[0] === 'date') {
+    return parseClassScheduleCSV(lines, delimiter, headerCellsRaw, cfg);
+  }
+
+  return parseLegacyTargetsCSV(lines, delimiter, headerCellsRaw, headerCells, cfg);
+}
+
+function parseClassScheduleCSV(lines, delimiter, headersRaw, cfg) {
+  const classKeys = headersRaw.slice(1).map(h => h.trim()).filter(Boolean);
+  const defaultDuration = typeof cfg.playlist_duration_sec === 'number' ? cfg.playlist_duration_sec : 10;
+  const displayNames = {};
+  const result = { defaults: {}, byDate: {}, displayNames: {} };
+
+  const interpretCell = (raw) => {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return null;
+
+    const baseItem = {
+      type: 'text',
+      content: trimmed,
+      durationSec: defaultDuration
+    };
+
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx <= 0) {
+      return baseItem;
+    }
+
+    const left = trimmed.slice(0, colonIdx).trim();
+    const right = trimmed.slice(colonIdx + 1).trim();
+    if (!left) {
+      return baseItem;
+    }
+
+    const segments = left.split('|').map(s => s.trim()).filter(Boolean);
+    if (!segments.length) {
+      return baseItem;
+    }
+
+    const type = segments.shift().toLowerCase();
+    if (!['text', 'slides', 'images', 'playlist'].includes(type)) {
+      return baseItem;
+    }
+
+    const opts = {};
+    for (const segment of segments) {
+      const eqIdx = segment.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = segment.slice(0, eqIdx).trim().toLowerCase();
+      const value = segment.slice(eqIdx + 1).trim();
+      if (!key || !value) continue;
+      opts[key] = value;
+    }
+
+    const item = { type };
+
+    const durationOpt = opts.duration || opts.d || opts.sec || opts.seconds;
+    if (durationOpt) {
+      const parsed = parseInt(durationOpt, 10);
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        item.durationSec = parsed;
+      }
+    }
+
+    if (!item.durationSec) {
+      item.durationSec = defaultDuration;
+    }
+
+    const labelOpt = opts.label || opts.name || opts.displayname;
+    if (labelOpt) {
+      item.displayName = labelOpt;
+    }
+
+    if (type === 'text') {
+      item.content = right || trimmed;
+      return item.content ? item : null;
+    }
+
+    if (type === 'slides') {
+      item.url = right;
+      return item.url ? item : null;
+    }
+
+    if (type === 'images') {
+      if (opts.folder) {
+        item.folder = opts.folder;
+      }
+
+      const payload = right;
+      if (payload) {
+        if (payload.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(payload);
+            if (Array.isArray(parsed) && parsed.length) {
+              item.items = parsed;
+            }
+          } catch (err) {
+            console.warn('Unable to parse images JSON from compact CSV cell', err);
+          }
+        }
+        if (!item.items?.length) {
+          const parts = payload.split(/[\n;,]+/).map(s => s.trim()).filter(Boolean);
+          if (parts.length > 1) {
+            item.items = parts.map(src => ({ src }));
+          } else if (parts.length === 1) {
+            const single = parts[0];
+            if (!item.folder) {
+              // Treat a single entry as a folder by default for parity with legacy CSV parsing.
+              item.folder = single;
+            } else {
+              // Folder already provided via opts; interpret the single value as a direct image.
+              item.items = [{ src: single }];
+            }
+          }
+        }
+      }
+
+      if (opts.items && !item.items?.length) {
+        try {
+          const parsed = JSON.parse(opts.items);
+          if (Array.isArray(parsed) && parsed.length) {
+            item.items = parsed;
+          }
+        } catch (err) {
+          console.warn('Unable to parse images items JSON from compact CSV options', err);
+        }
+      }
+
+      if (!item.folder && !item.items?.length) {
+        return null;
+      }
+      return item;
+    }
+
+    if (type === 'playlist') {
+      const payload = right;
+      if (!payload) return null;
+      try {
+        const parsed = JSON.parse(payload);
+        if (Array.isArray(parsed) && parsed.length) {
+          item.items = parsed;
+          return item;
+        }
+      } catch (err) {
+        console.warn('Unable to parse playlist JSON from compact CSV cell', err);
+      }
+      return null;
+    }
+
+    return baseItem;
+  };
+
+  const upsertItems = (dest, values) => {
+    for (let i = 1; i < headersRaw.length; i++) {
+      const key = classKeys[i - 1];
+      if (!key) continue;
+      const cell = values[i];
+      const item = interpretCell(cell);
+      if (!item) continue;
+      if (!item.durationSec || Number.isNaN(item.durationSec)) {
+        item.durationSec = defaultDuration;
+      }
+      if (!item.displayName && displayNames[key]) {
+        item.displayName = displayNames[key];
+      }
+      dest[key] = item;
+    }
+  };
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCSVLine(lines[i], delimiter);
+    if (!values.length) continue;
+    while (values.length < headersRaw.length) values.push('');
+
+    const first = (values[0] || '').trim();
+    const firstLower = first.toLowerCase();
+
+    if (!first || firstLower === 'display name' || firstLower === 'display names') {
+      for (let j = 1; j < headersRaw.length; j++) {
+        const key = classKeys[j - 1];
+        if (!key) continue;
+        const label = (values[j] || '').trim();
+        if (label) {
+          displayNames[key] = label;
+        }
+      }
+      continue;
+    }
+
+    if (firstLower === 'default' || firstLower === 'defaults') {
+      upsertItems(result.defaults, values);
+      continue;
+    }
+
+    const dateKey = normalizeDateKey(first);
+    if (!dateKey) continue;
+    if (!result.byDate[dateKey]) result.byDate[dateKey] = {};
+    upsertItems(result.byDate[dateKey], values);
+  }
+
+  if (Object.keys(displayNames).length) {
+    const applyLabels = dest => {
+      if (!dest) return;
+      for (const [key, item] of Object.entries(dest)) {
+        if (item && typeof item === 'object' && !item.displayName && displayNames[key]) {
+          item.displayName = displayNames[key];
+        }
+      }
+    };
+    applyLabels(result.defaults);
+    for (const dateKey of Object.keys(result.byDate || {})) {
+      applyLabels(result.byDate[dateKey]);
+    }
+  }
+
+  if (Object.keys(displayNames).length) {
+    result.displayNames = displayNames;
+  } else {
+    delete result.displayNames;
+  }
+
+  if (!Object.keys(result.defaults).length) delete result.defaults;
+  if (!Object.keys(result.byDate).length) delete result.byDate;
+
+  return result;
+}
+
+function parseLegacyTargetsCSV(lines, delimiter, headersRaw, headersLower, cfg) {
+  const indexOf = (...names) => {
+    for (const name of names) {
+      const idx = headersLower.indexOf(name.toLowerCase());
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  };
+
+  const idxKey = indexOf('classkey', 'key', 'thread');
+  const idxDisplay = indexOf('displayname', 'display name', 'name');
+  const idxType = indexOf('contenttype', 'type');
+  const idxUrl = indexOf('contenturl', 'url');
+  const idxText = indexOf('contenttext', 'text', 'content');
+  const idxDuration = indexOf('durationsec', 'duration');
+  const idxDate = indexOf('date', 'day', 'effective', 'ymd');
+
+  const result = { defaults: {}, byDate: {} };
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCSVLine(lines[i], delimiter);
+    if (idxKey === -1 || idxType === -1 || !values.length) continue;
+
+    const key = (values[idxKey] || '').trim();
+    if (!key) continue;
+
+    const type = (values[idxType] || '').trim().toLowerCase();
+    if (!type) continue;
+
+    const displayName = idxDisplay !== -1 ? (values[idxDisplay] || '').trim() : '';
+    const duration = idxDuration !== -1 ? parseInt((values[idxDuration] || '').trim(), 10) : NaN;
+    const resolvedDuration = !isNaN(duration)
+      ? duration
+      : (typeof cfg.playlist_duration_sec === 'number' ? cfg.playlist_duration_sec : 10);
+
+    const item = { type, durationSec: resolvedDuration };
+    if (displayName) item.displayName = displayName;
+
+    const textValue = idxText !== -1 ? (values[idxText] || '').trim() : '';
+    const urlValue = idxUrl !== -1 ? (values[idxUrl] || '').trim() : '';
+
+    if (type === 'text') {
+      item.content = textValue || urlValue;
+    } else if (type === 'slides') {
+      item.url = urlValue || textValue;
+    } else if (type === 'images') {
+      if (urlValue.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(urlValue);
+          if (Array.isArray(parsed)) item.items = parsed;
+        } catch (err) {
+          console.warn('Unable to parse images JSON for', key, err);
+        }
+      }
+      if (!item.items?.length) {
+        const parts = urlValue.split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
+        if (parts.length > 1) {
+          item.items = parts.map(src => ({ src }));
+        } else if (parts.length === 1) {
+          item.folder = parts[0];
+        } else if (textValue) {
+          item.folder = textValue;
+        }
+      }
+    } else if (type === 'playlist') {
+      const raw = textValue || urlValue;
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) item.items = parsed;
+        } catch (err) {
+          console.warn('Unable to parse playlist JSON for', key, err);
+        }
+      }
+    } else {
+      continue;
+    }
+
+    if (type === 'text' && !item.content) continue;
+    if ((type === 'slides' || type === 'images') && !item.url && !item.folder && !item.items) continue;
+
+    const dateValue = idxDate !== -1 ? normalizeDateKey(values[idxDate]) : null;
+    if (dateValue) {
+      if (!result.byDate[dateValue]) result.byDate[dateValue] = {};
+      result.byDate[dateValue][key] = item;
+    } else {
+      result.defaults[key] = item;
+    }
+  }
+
+  if (!Object.keys(result.byDate).length) delete result.byDate;
+
+  return result;
+}
+
+function parseCSVLine(line, delimiter = ',') {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delimiter) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+function detectDelimiter(line) {
+  const commaCount = (line.match(/,/g) || []).length;
+  const tabCount = (line.match(/\t/g) || []).length;
+  return tabCount > commaCount ? '\t' : ',';
+}
+
+function normalizeClassMap(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return { defaults: {}, byDate: {} };
+  }
+
+  const result = { defaults: {}, byDate: {} };
+
+  if (raw.defaults && typeof raw.defaults === 'object') {
+    for (const [thread, value] of Object.entries(raw.defaults)) {
+      result.defaults[thread] = cloneItem(value);
+    }
+  }
+
+  if (raw.byDate && typeof raw.byDate === 'object') {
+    for (const [dateKey, value] of Object.entries(raw.byDate)) {
+      const normalizedKey = normalizeDateKey(dateKey);
+      if (!normalizedKey) continue;
+      result.byDate[normalizedKey] = cloneItem(value);
+    }
+  }
+
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === 'defaults' || key === 'byDate') continue;
+    const normalizedKey = normalizeDateKey(key);
+    if (!normalizedKey) continue;
+    result.byDate[normalizedKey] = cloneItem(value);
+  }
+
+  if (!Object.keys(result.defaults).length) delete result.defaults;
+  if (!Object.keys(result.byDate).length) delete result.byDate;
+
+  return result;
+}
+
+function normalizeDateKey(value) {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, '0');
+  const d = String(parsed.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 
@@ -418,6 +1127,46 @@ function renderPlaylist(playlist) {
 
 /* ---------- Calendar handling ---------- */
 
+function resolveICSUrlList(cfg, override) {
+  if (override) return [override];
+  const urls = [];
+  if (Array.isArray(cfg?.ics_urls)) {
+    for (const entry of cfg.ics_urls) urls.push(entry);
+  }
+  if (cfg?.ics_proxy_url) urls.push(cfg.ics_proxy_url);
+  if (cfg?.ics_url) urls.push(cfg.ics_url);
+  return Array.from(new Set(urls.filter(Boolean)));
+}
+
+function noteCalendarAttempt(url) {
+  calendarHealth.lastAttempt = new Date().toISOString();
+  calendarHealth.lastAttemptUrl = url || null;
+}
+
+function noteCalendarSuccess(url, count) {
+  calendarHealth.lastSuccess = new Date().toISOString();
+  calendarHealth.lastSuccessUrl = url;
+  calendarHealth.lastCount = count;
+  calendarHealth.lastError = null;
+}
+
+function noteCalendarFailure(url, err) {
+  calendarHealth.lastError = {
+    url,
+    message: describeFetchError(err),
+    time: new Date().toISOString()
+  };
+}
+
+function describeFetchError(err) {
+  if (!err) return 'Unknown error';
+  const msg = err.message || String(err);
+  if (err instanceof TypeError && /Failed to fetch/i.test(msg)) {
+    return 'Failed to fetch (network or CORS issue)';
+  }
+  return msg;
+}
+
 async function currentThread(now) {
   const tz = CFG.timezone || 'America/Los_Angeles';
 
@@ -428,11 +1177,7 @@ async function currentThread(now) {
 
   // TEST OVERRIDE: ?ics=https://...workers.dev/ics
   const icsOverride = q.get('ics');
-  const icsUrlList = icsOverride
-    ? [icsOverride]
-    : (Array.isArray(CFG.ics_urls)
-        ? CFG.ics_urls
-        : (CFG.ics_proxy_url || CFG.ics_url ? [CFG.ics_proxy_url || CFG.ics_url] : []));
+  const icsUrlList = resolveICSUrlList(CFG, icsOverride);
 
   if (!icsUrlList.length) {
     return { thread: null, start: null, end: null, summary: '', debug: { reason: 'no-ics-config', lookedAt: [] } };
@@ -443,9 +1188,12 @@ async function currentThread(now) {
 
   for (const url of icsUrlList) {
     try {
+      noteCalendarAttempt(url);
       const icsText = await fetchText(icsUrlWithCacheBust(url));
       const events = parseICSEvents(icsText);
       const parsed = expandEventsNearNow(events, now, tz, 7, 7);  // ← expand RRULEs near now
+
+      noteCalendarSuccess(url, parsed.length);
 
       // sort by start time
       parsed.sort((a,b) => a.start - b.start);
@@ -464,14 +1212,20 @@ async function currentThread(now) {
         const title = (hit.summary || '').toLowerCase();
 
         // Extract period number/letter if present (handles "1st period", "period 2", "p3", "Period A", "p10")
-        const thread = mapSummaryToThread(    //NEW AFTER MOVING MAP TO UTILS
+        const thread = mapSummaryToThread(
           hit.summary,
           CFG.event_map || {},
           CFG.default_thread
         );
 
 
-        found = { thread, start: hit.start, end: hit.end, summary: hit.summary, debug: { reason: current ? 'current' : 'grace', url } };
+        found = {
+          thread,
+          start: hit.start,
+          end: hit.end,
+          summary: hit.summary,
+          debug: { ...debugInfo, reason: current ? 'current' : 'grace', url }
+        };
         break;
       }
 
@@ -485,12 +1239,18 @@ async function currentThread(now) {
         };
       }
     } catch (err) {
-      debugInfo.lookedAt.push({ url, error: err.message || String(err) });
+      debugInfo.lookedAt.push({ url, error: describeFetchError(err) });
+      noteCalendarFailure(url, err);
+      if (!debugInfo.reason) debugInfo.reason = 'calendar-fetch-error';
       continue;
     }
   }
 
   if (found) return found;
+
+  if (!debugInfo.reason && debugInfo.lookedAt.some(entry => entry.error)) {
+    debugInfo.reason = 'calendar-fetch-error';
+  }
 
   // fallback-schedule as last resort
   try {
@@ -500,7 +1260,13 @@ async function currentThread(now) {
     for (const b of blocks) {
       const {start, end} = blockToDates(now, b.start, b.end);
       if (now >= start && now < end) {
-        return { thread: b.thread, start, end, summary: '(fallback schedule)', debug: { reason: 'fallback' } };
+        return {
+          thread: b.thread,
+          start,
+          end,
+          summary: '(fallback schedule)',
+          debug: { ...debugInfo, reason: 'fallback' }
+        };
       }
     }
   } catch {/* ignore */}
@@ -629,9 +1395,7 @@ function pickCurrentICSEvent(icsText, now, displayTZ) {
 
 async function inspectICS(now) {
   const tz = CFG.timezone || 'America/Los_Angeles';
-  const icsList = Array.isArray(CFG.ics_urls)
-    ? CFG.ics_urls
-    : (CFG.ics_proxy_url || CFG.ics_url ? [CFG.ics_proxy_url || CFG.ics_url] : []);
+  const icsList = resolveICSUrlList(CFG);
 
   const wrap = el('div');
   wrap.appendChild(el('h2', {text: 'ICS Inspector'}));
@@ -645,11 +1409,14 @@ async function inspectICS(now) {
       el('h3', {text: `Feed: ${url}`})
     ]);
     try {
+      noteCalendarAttempt(url);
       const icsText = await fetchText(icsUrlWithCacheBust(url));
       const eventsRaw = parseICSEvents(icsText);
-     
+
       // Expand recurring events ±7 days around "now"
       const events = expandEventsNearNow(eventsRaw, now, tz, 7, 7);
+
+      noteCalendarSuccess(url, events.length);
       
       section.appendChild(el('p', {
         text: `Expanded events in ±7-day window: ${events.length}`
@@ -658,7 +1425,14 @@ async function inspectICS(now) {
       section.appendChild(el('p', {text: `Parsed events: ${events.length}`}));
 
       const table = el('table', {class: 'ics-table'});
-      const thread = mapSummaryToThread(ev.summary, CFG.event_map || {}, CFG.default_thread) || '(n/a)';   //NEW WHEN ADDED MAPPING TO UTILS
+      const thead = el('thead');
+      thead.appendChild(el('tr', {}, [
+        el('th', {text: 'Now?'}),
+        el('th', {text: 'Start'}),
+        el('th', {text: 'End'}),
+        el('th', {text: 'Summary'}),
+        el('th', {text: 'Thread'})
+      ]));
       table.appendChild(thead);
       const tbody = el('tbody');
 
@@ -668,15 +1442,7 @@ async function inspectICS(now) {
         if (count++ >= LIMIT) break;
         const contains = (now >= ev.start && now < ev.end);
         const title = (ev.summary || '').toLowerCase();
-        const m = title.match(/\b(?:p(?:eriod)?\s*)?([0-9]{1,2}|[a-z])\b/);
-        let thread = '(n/a)';
-        if (m) {
-          const token = m[1];
-          thread = isNaN(token) ? ('p' + token) : ('p' + parseInt(token,10));
-        } else if (CFG.event_map) {
-          const key = Object.keys(CFG.event_map).find(k => title.includes(k.toLowerCase()));
-          if (key) thread = CFG.event_map[key];
-        }
+        const thread = mapSummaryToThread(ev.summary, CFG.event_map || {}, CFG.default_thread) || '(n/a)';
 
         const row = el('tr', {class: contains ? 'now' : ''}, [
           el('td', {text: contains ? 'YES' : ''}),
@@ -690,7 +1456,8 @@ async function inspectICS(now) {
       table.appendChild(tbody);
       section.appendChild(table);
     } catch (err) {
-      section.appendChild(el('p', {text: `Error: ${err.message}`}));
+      noteCalendarFailure(url, err);
+      section.appendChild(el('p', {text: `Error: ${describeFetchError(err)}`}));
     }
     wrap.appendChild(section);
   }
@@ -898,11 +1665,39 @@ function fitContentToStage(targetFill = 0.95) {
 }
 
 function validDateOrNull(d) {return (d instanceof Date && !isNaN(d.getTime())) ? d : null;}
-async function fetchJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.json(); }
-async function fetchText(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.text(); }
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) {
+      throw new Error(`HTTP ${r.status}${r.statusText ? ' ' + r.statusText : ''}`.trim());
+    }
+    return await r.json();
+  } catch (err) {
+    const message = describeFetchError(err instanceof Error ? err : new Error(String(err)));
+    throw new Error(`Fetch failed for ${url}: ${message}`);
+  }
+}
+
+async function fetchText(url) {
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) {
+      throw new Error(`HTTP ${r.status}${r.statusText ? ' ' + r.statusText : ''}`.trim());
+    }
+    return await r.text();
+  } catch (err) {
+    const message = describeFetchError(err instanceof Error ? err : new Error(String(err)));
+    throw new Error(`Fetch failed for ${url}: ${message}`);
+  }
+}
 function icsUrlWithCacheBust(url){ const u=new URL(url); u.searchParams.set('t', Date.now()); return u.toString(); }
 function formatNow(d, tz){ return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} ${tz ? '('+tz+')' : ''}`; }
 function formatNowNoTZ(d) { return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour: '2-digit',minute: '2-digit'})}`;}
 function escapeHTML(s){ return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
-function clearTimers(){ if (ticker) { clearInterval(ticker); ticker=null; } if (slideTimer){ clearInterval(slideTimer); slideTimer=null; } }
+function clearTimers(options = {}) {
+  const { keepPlaylist = false } = options;
+  if (ticker) { clearInterval(ticker); ticker = null; }
+  if (slideTimer) { clearInterval(slideTimer); slideTimer = null; }
+  if (!keepPlaylist && playlistTimer) { clearTimeout(playlistTimer); playlistTimer = null; }
+}
 function fail(e){ $content.textContent='Error loading display.'; $status.textContent = (e && e.message) ? e.message : 'Unknown error'; }
