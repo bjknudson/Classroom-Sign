@@ -561,7 +561,18 @@ async function renderImages(item, token) {
       showError('No image URLs in items.');
       return;
     }
-    cycleImages(urls, item.durationSec, mount, token);
+    try {
+      const validUrls = await filterValidImageUrls(urls, token);
+      if (token != null && token !== currentRenderToken) return;
+      if (validUrls.length === 0) {
+        showError('No valid images found.');
+        return;
+      }
+      cycleImages(validUrls, item.durationSec, mount, token);
+    } catch (err) {
+      showError(`Error loading images: ${err.message}`);
+      console.error(err);
+    }
     return;
   }
 
@@ -577,7 +588,13 @@ async function renderImages(item, token) {
         throw new Error(`manifest.json is empty or invalid in ${item.folder}`);
       }
       const urls = list.map(name => `${item.folder}/${name}`);
-      cycleImages(urls, item.durationSec, mount, token);
+      const validUrls = await filterValidImageUrls(urls, token);
+      if (token != null && token !== currentRenderToken) return;
+      if (validUrls.length === 0) {
+        showError('No valid images found.');
+        return;
+      }
+      cycleImages(validUrls, item.durationSec, mount, token);
       return;
     } catch (err) {
       showError(`Error loading images: ${err.message}`);
@@ -609,6 +626,42 @@ function cycleImages(urls, durationSec, mount = $content, token) {
     }
     show();
   }, (durationSec || 10) * 1000);
+}
+
+async function filterValidImageUrls(urls, token) {
+  const valid = [];
+  for (const url of urls) {
+    if (token != null && token !== currentRenderToken) {
+      return [];
+    }
+    const ok = await checkImage(url);
+    if (token != null && token !== currentRenderToken) {
+      return [];
+    }
+    if (ok) {
+      valid.push(url);
+    }
+  }
+  return valid;
+}
+
+function checkImage(url) {
+  return new Promise(resolve => {
+    const img = new Image();
+    let settled = false;
+    const cleanup = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+      resolve(result);
+    };
+    const timer = setTimeout(() => cleanup(false), 5000);
+    img.onload = () => cleanup(true);
+    img.onerror = () => cleanup(false);
+    img.src = url;
+  });
 }
 
 
@@ -1072,57 +1125,6 @@ function normalizeDateKey(value) {
   const m = String(parsed.getMonth() + 1).padStart(2, '0');
   const d = String(parsed.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
-}
-
-
-function renderPlaylist(playlist) {
-  clearTimers();
-  const items = playlist.items;
-
-  if (!Array.isArray(items) || items.length === 0) {
-    $content.textContent = 'Playlist is empty.';
-    return;
-  }
-
-  let i = 0;
-  
-  const showNext = () => {
-    const currentItem = items[i % items.length];
-    
-    // 1. Temporarily clear timers and render the single item
-    clearTimers();
-    // This calls renderItem *recursively* but prevents an infinite loop 
-    // because the currentItem.type won't be 'playlist'.
-    // We must pass the original 'slideTimer' variable by reference or manage it externally.
-    
-    // To avoid complex recursion/timer management, let's just render the content directly
-    // and rely on the content types ('text', 'slides', 'images') to reset slideTimer 
-    // if *they* need their own internal rotation/timer (e.g., images).
-
-    // --- WARNING: RISKY RECURSION. Better to abstract rendering. ---
-    // A cleaner approach is to use a temporary container for the single item render.
-    
-    // Use the existing renderItem, but re-arm the playlist timer after it runs
-    
-    // Store the old timer function temporarily
-    const oldSlideTimer = slideTimer; 
-    slideTimer = null; // Prevent renderItem from thinking a timer is running
-
-    // Render the specific item inside the playlist
-    renderItem(currentItem); 
-    
-    // Update the status to show the current class/target
-    const source = currentItem.sourceClass || currentItem.type;
-    $status.textContent = `Playlist: ${source} (${i+1}/${items.length})`;
-
-    // Re-arm the playlist timer to cycle to the *next* item
-    i++;
-    // Set slideTimer to the interval for the *playlist* itself
-    slideTimer = setInterval(showNext, (playlist.durationSec || 10) * 1000);
-  };
-  
-  // Start the cycle
-  showNext();
 }
 
 /* ---------- Calendar handling ---------- */
