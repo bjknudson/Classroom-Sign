@@ -52,6 +52,15 @@ let playlistTimer = null;
 let renderTokenCounter = 0;
 let currentRenderToken = 0;
 
+const calendarHealth = {
+  lastAttempt: null,
+  lastAttemptUrl: null,
+  lastSuccess: null,
+  lastSuccessUrl: null,
+  lastCount: 0,
+  lastError: null
+};
+
 function newRenderToken() {
   renderTokenCounter += 1;
   return renderTokenCounter;
@@ -162,6 +171,11 @@ async function loop() {
 
     const threadInfo = await currentThread(now); // {thread,start,end,summary}
     const minutesLeft = threadInfo.end ? Math.ceil((threadInfo.end - now) / 60000) : null;
+    const lookedAt = threadInfo.debug?.lookedAt || [];
+    const hasSuccessProbe = lookedAt.some(entry => entry && typeof entry.count === 'number');
+    const hasErrorProbe = lookedAt.some(entry => entry && entry.error);
+    const calendarError = threadInfo.debug?.reason === 'calendar-fetch-error'
+      || (!hasSuccessProbe && hasErrorProbe);
 
     let picked = null;
     let pickedReason = '';
@@ -181,23 +195,35 @@ async function loop() {
 
     if (picked) {
       renderItem(picked);
-      $status.textContent = pickedReason.includes('targets')
+      let statusText = pickedReason.includes('targets')
         ? `In-class • ${threadInfo.thread?.toUpperCase()}`
         : pickedReason;
+      if (calendarError) {
+        statusText += ' • Calendar fetch error';
+      }
+      $status.textContent = statusText;
     } else {
-      $content.textContent = 'No content scheduled.';
-      $status.textContent = 'Idle';
+      if (calendarError) {
+        if (!$content.textContent) {
+          $content.textContent = 'Calendar unavailable.';
+        }
+        $status.textContent = 'Calendar fetch error';
+      } else {
+        $content.textContent = 'No content scheduled.';
+        $status.textContent = 'Idle';
+      }
     }
 
     showDebug({
-    now: formatNowNoTZ(now),
-    eventSummary: threadInfo.summary || '(none)',
-    mappedThread: threadInfo.thread || '(none)',
-    start: threadInfo.start ? threadInfo.start.toString() : null,
-    end: threadInfo.end ? threadInfo.end.toString() : null,
-    reason: threadInfo.debug?.reason || '(n/a)',
-    lookedAt: threadInfo.debug?.lookedAt || [],
-    nextEvent: threadInfo.debug?.nextEvent || null
+      now: formatNowNoTZ(now),
+      eventSummary: threadInfo.summary || '(none)',
+      mappedThread: threadInfo.thread || '(none)',
+      start: threadInfo.start ? threadInfo.start.toString() : null,
+      end: threadInfo.end ? threadInfo.end.toString() : null,
+      reason: threadInfo.debug?.reason || '(n/a)',
+      lookedAt: threadInfo.debug?.lookedAt || [],
+      nextEvent: threadInfo.debug?.nextEvent || null,
+      calendarHealth
     });
 
   } catch (e) {
@@ -658,19 +684,158 @@ function parseClassScheduleCSV(lines, delimiter, headersRaw, cfg) {
   const displayNames = {};
   const result = { defaults: {}, byDate: {}, displayNames: {} };
 
+  const interpretCell = (raw) => {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return null;
+
+    const baseItem = {
+      type: 'text',
+      content: trimmed,
+      durationSec: defaultDuration
+    };
+
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx <= 0) {
+      return baseItem;
+    }
+
+    const left = trimmed.slice(0, colonIdx).trim();
+    const right = trimmed.slice(colonIdx + 1).trim();
+    if (!left) {
+      return baseItem;
+    }
+
+    const segments = left.split('|').map(s => s.trim()).filter(Boolean);
+    if (!segments.length) {
+      return baseItem;
+    }
+
+    const type = segments.shift().toLowerCase();
+    if (!['text', 'slides', 'images', 'playlist'].includes(type)) {
+      return baseItem;
+    }
+
+    const opts = {};
+    for (const segment of segments) {
+      const eqIdx = segment.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = segment.slice(0, eqIdx).trim().toLowerCase();
+      const value = segment.slice(eqIdx + 1).trim();
+      if (!key || !value) continue;
+      opts[key] = value;
+    }
+
+    const item = { type };
+
+    const durationOpt = opts.duration || opts.d || opts.sec || opts.seconds;
+    if (durationOpt) {
+      const parsed = parseInt(durationOpt, 10);
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        item.durationSec = parsed;
+      }
+    }
+
+    if (!item.durationSec) {
+      item.durationSec = defaultDuration;
+    }
+
+    const labelOpt = opts.label || opts.name || opts.displayname;
+    if (labelOpt) {
+      item.displayName = labelOpt;
+    }
+
+    if (type === 'text') {
+      item.content = right || trimmed;
+      return item.content ? item : null;
+    }
+
+    if (type === 'slides') {
+      item.url = right;
+      return item.url ? item : null;
+    }
+
+    if (type === 'images') {
+      if (opts.folder) {
+        item.folder = opts.folder;
+      }
+
+      const payload = right;
+      if (payload) {
+        if (payload.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(payload);
+            if (Array.isArray(parsed) && parsed.length) {
+              item.items = parsed;
+            }
+          } catch (err) {
+            console.warn('Unable to parse images JSON from compact CSV cell', err);
+          }
+        }
+        if (!item.items?.length) {
+          const parts = payload.split(/[\n;,]+/).map(s => s.trim()).filter(Boolean);
+          if (parts.length > 1) {
+            item.items = parts.map(src => ({ src }));
+          } else if (parts.length === 1) {
+            const single = parts[0];
+            if (!item.folder) {
+              // Treat a single entry as a folder by default for parity with legacy CSV parsing.
+              item.folder = single;
+            } else {
+              // Folder already provided via opts; interpret the single value as a direct image.
+              item.items = [{ src: single }];
+            }
+          }
+        }
+      }
+
+      if (opts.items && !item.items?.length) {
+        try {
+          const parsed = JSON.parse(opts.items);
+          if (Array.isArray(parsed) && parsed.length) {
+            item.items = parsed;
+          }
+        } catch (err) {
+          console.warn('Unable to parse images items JSON from compact CSV options', err);
+        }
+      }
+
+      if (!item.folder && !item.items?.length) {
+        return null;
+      }
+      return item;
+    }
+
+    if (type === 'playlist') {
+      const payload = right;
+      if (!payload) return null;
+      try {
+        const parsed = JSON.parse(payload);
+        if (Array.isArray(parsed) && parsed.length) {
+          item.items = parsed;
+          return item;
+        }
+      } catch (err) {
+        console.warn('Unable to parse playlist JSON from compact CSV cell', err);
+      }
+      return null;
+    }
+
+    return baseItem;
+  };
+
   const upsertItems = (dest, values) => {
     for (let i = 1; i < headersRaw.length; i++) {
       const key = classKeys[i - 1];
       if (!key) continue;
-      const cell = (values[i] || '').trim();
-      if (!cell) continue;
-      const item = {
-        type: 'text',
-        content: cell,
-        durationSec: defaultDuration
-      };
-      const label = displayNames[key];
-      if (label) item.displayName = label;
+      const cell = values[i];
+      const item = interpretCell(cell);
+      if (!item) continue;
+      if (!item.durationSec || Number.isNaN(item.durationSec)) {
+        item.durationSec = defaultDuration;
+      }
+      if (!item.displayName && displayNames[key]) {
+        item.displayName = displayNames[key];
+      }
       dest[key] = item;
     }
   };
@@ -962,6 +1127,46 @@ function renderPlaylist(playlist) {
 
 /* ---------- Calendar handling ---------- */
 
+function resolveICSUrlList(cfg, override) {
+  if (override) return [override];
+  const urls = [];
+  if (Array.isArray(cfg?.ics_urls)) {
+    for (const entry of cfg.ics_urls) urls.push(entry);
+  }
+  if (cfg?.ics_proxy_url) urls.push(cfg.ics_proxy_url);
+  if (cfg?.ics_url) urls.push(cfg.ics_url);
+  return Array.from(new Set(urls.filter(Boolean)));
+}
+
+function noteCalendarAttempt(url) {
+  calendarHealth.lastAttempt = new Date().toISOString();
+  calendarHealth.lastAttemptUrl = url || null;
+}
+
+function noteCalendarSuccess(url, count) {
+  calendarHealth.lastSuccess = new Date().toISOString();
+  calendarHealth.lastSuccessUrl = url;
+  calendarHealth.lastCount = count;
+  calendarHealth.lastError = null;
+}
+
+function noteCalendarFailure(url, err) {
+  calendarHealth.lastError = {
+    url,
+    message: describeFetchError(err),
+    time: new Date().toISOString()
+  };
+}
+
+function describeFetchError(err) {
+  if (!err) return 'Unknown error';
+  const msg = err.message || String(err);
+  if (err instanceof TypeError && /Failed to fetch/i.test(msg)) {
+    return 'Failed to fetch (network or CORS issue)';
+  }
+  return msg;
+}
+
 async function currentThread(now) {
   const tz = CFG.timezone || 'America/Los_Angeles';
 
@@ -972,11 +1177,7 @@ async function currentThread(now) {
 
   // TEST OVERRIDE: ?ics=https://...workers.dev/ics
   const icsOverride = q.get('ics');
-  const icsUrlList = icsOverride
-    ? [icsOverride]
-    : (Array.isArray(CFG.ics_urls)
-        ? CFG.ics_urls
-        : (CFG.ics_proxy_url || CFG.ics_url ? [CFG.ics_proxy_url || CFG.ics_url] : []));
+  const icsUrlList = resolveICSUrlList(CFG, icsOverride);
 
   if (!icsUrlList.length) {
     return { thread: null, start: null, end: null, summary: '', debug: { reason: 'no-ics-config', lookedAt: [] } };
@@ -987,9 +1188,12 @@ async function currentThread(now) {
 
   for (const url of icsUrlList) {
     try {
+      noteCalendarAttempt(url);
       const icsText = await fetchText(icsUrlWithCacheBust(url));
       const events = parseICSEvents(icsText);
       const parsed = expandEventsNearNow(events, now, tz, 7, 7);  // ← expand RRULEs near now
+
+      noteCalendarSuccess(url, parsed.length);
 
       // sort by start time
       parsed.sort((a,b) => a.start - b.start);
@@ -1008,14 +1212,20 @@ async function currentThread(now) {
         const title = (hit.summary || '').toLowerCase();
 
         // Extract period number/letter if present (handles "1st period", "period 2", "p3", "Period A", "p10")
-        const thread = mapSummaryToThread(    //NEW AFTER MOVING MAP TO UTILS
+        const thread = mapSummaryToThread(
           hit.summary,
           CFG.event_map || {},
           CFG.default_thread
         );
 
 
-        found = { thread, start: hit.start, end: hit.end, summary: hit.summary, debug: { reason: current ? 'current' : 'grace', url } };
+        found = {
+          thread,
+          start: hit.start,
+          end: hit.end,
+          summary: hit.summary,
+          debug: { ...debugInfo, reason: current ? 'current' : 'grace', url }
+        };
         break;
       }
 
@@ -1029,12 +1239,18 @@ async function currentThread(now) {
         };
       }
     } catch (err) {
-      debugInfo.lookedAt.push({ url, error: err.message || String(err) });
+      debugInfo.lookedAt.push({ url, error: describeFetchError(err) });
+      noteCalendarFailure(url, err);
+      if (!debugInfo.reason) debugInfo.reason = 'calendar-fetch-error';
       continue;
     }
   }
 
   if (found) return found;
+
+  if (!debugInfo.reason && debugInfo.lookedAt.some(entry => entry.error)) {
+    debugInfo.reason = 'calendar-fetch-error';
+  }
 
   // fallback-schedule as last resort
   try {
@@ -1044,7 +1260,13 @@ async function currentThread(now) {
     for (const b of blocks) {
       const {start, end} = blockToDates(now, b.start, b.end);
       if (now >= start && now < end) {
-        return { thread: b.thread, start, end, summary: '(fallback schedule)', debug: { reason: 'fallback' } };
+        return {
+          thread: b.thread,
+          start,
+          end,
+          summary: '(fallback schedule)',
+          debug: { ...debugInfo, reason: 'fallback' }
+        };
       }
     }
   } catch {/* ignore */}
@@ -1173,9 +1395,7 @@ function pickCurrentICSEvent(icsText, now, displayTZ) {
 
 async function inspectICS(now) {
   const tz = CFG.timezone || 'America/Los_Angeles';
-  const icsList = Array.isArray(CFG.ics_urls)
-    ? CFG.ics_urls
-    : (CFG.ics_proxy_url || CFG.ics_url ? [CFG.ics_proxy_url || CFG.ics_url] : []);
+  const icsList = resolveICSUrlList(CFG);
 
   const wrap = el('div');
   wrap.appendChild(el('h2', {text: 'ICS Inspector'}));
@@ -1189,11 +1409,14 @@ async function inspectICS(now) {
       el('h3', {text: `Feed: ${url}`})
     ]);
     try {
+      noteCalendarAttempt(url);
       const icsText = await fetchText(icsUrlWithCacheBust(url));
       const eventsRaw = parseICSEvents(icsText);
-     
+
       // Expand recurring events ±7 days around "now"
       const events = expandEventsNearNow(eventsRaw, now, tz, 7, 7);
+
+      noteCalendarSuccess(url, events.length);
       
       section.appendChild(el('p', {
         text: `Expanded events in ±7-day window: ${events.length}`
@@ -1202,7 +1425,14 @@ async function inspectICS(now) {
       section.appendChild(el('p', {text: `Parsed events: ${events.length}`}));
 
       const table = el('table', {class: 'ics-table'});
-      const thread = mapSummaryToThread(ev.summary, CFG.event_map || {}, CFG.default_thread) || '(n/a)';   //NEW WHEN ADDED MAPPING TO UTILS
+      const thead = el('thead');
+      thead.appendChild(el('tr', {}, [
+        el('th', {text: 'Now?'}),
+        el('th', {text: 'Start'}),
+        el('th', {text: 'End'}),
+        el('th', {text: 'Summary'}),
+        el('th', {text: 'Thread'})
+      ]));
       table.appendChild(thead);
       const tbody = el('tbody');
 
@@ -1212,15 +1442,7 @@ async function inspectICS(now) {
         if (count++ >= LIMIT) break;
         const contains = (now >= ev.start && now < ev.end);
         const title = (ev.summary || '').toLowerCase();
-        const m = title.match(/\b(?:p(?:eriod)?\s*)?([0-9]{1,2}|[a-z])\b/);
-        let thread = '(n/a)';
-        if (m) {
-          const token = m[1];
-          thread = isNaN(token) ? ('p' + token) : ('p' + parseInt(token,10));
-        } else if (CFG.event_map) {
-          const key = Object.keys(CFG.event_map).find(k => title.includes(k.toLowerCase()));
-          if (key) thread = CFG.event_map[key];
-        }
+        const thread = mapSummaryToThread(ev.summary, CFG.event_map || {}, CFG.default_thread) || '(n/a)';
 
         const row = el('tr', {class: contains ? 'now' : ''}, [
           el('td', {text: contains ? 'YES' : ''}),
@@ -1234,7 +1456,8 @@ async function inspectICS(now) {
       table.appendChild(tbody);
       section.appendChild(table);
     } catch (err) {
-      section.appendChild(el('p', {text: `Error: ${err.message}`}));
+      noteCalendarFailure(url, err);
+      section.appendChild(el('p', {text: `Error: ${describeFetchError(err)}`}));
     }
     wrap.appendChild(section);
   }
@@ -1442,8 +1665,31 @@ function fitContentToStage(targetFill = 0.95) {
 }
 
 function validDateOrNull(d) {return (d instanceof Date && !isNaN(d.getTime())) ? d : null;}
-async function fetchJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.json(); }
-async function fetchText(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} ${r.status}`); return r.text(); }
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) {
+      throw new Error(`HTTP ${r.status}${r.statusText ? ' ' + r.statusText : ''}`.trim());
+    }
+    return await r.json();
+  } catch (err) {
+    const message = describeFetchError(err instanceof Error ? err : new Error(String(err)));
+    throw new Error(`Fetch failed for ${url}: ${message}`);
+  }
+}
+
+async function fetchText(url) {
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) {
+      throw new Error(`HTTP ${r.status}${r.statusText ? ' ' + r.statusText : ''}`.trim());
+    }
+    return await r.text();
+  } catch (err) {
+    const message = describeFetchError(err instanceof Error ? err : new Error(String(err)));
+    throw new Error(`Fetch failed for ${url}: ${message}`);
+  }
+}
 function icsUrlWithCacheBust(url){ const u=new URL(url); u.searchParams.set('t', Date.now()); return u.toString(); }
 function formatNow(d, tz){ return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} ${tz ? '('+tz+')' : ''}`; }
 function formatNowNoTZ(d) { return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour: '2-digit',minute: '2-digit'})}`;}
