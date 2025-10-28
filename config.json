@@ -1,5 +1,6 @@
 {
   "timezone": "America/Los_Angeles",
+  "ics_url": "https://calendar.google.com/calendar/ical/c_9f4dea8c0dd86e0300ef20ae2ed529912a38471e19c61f8582a669c1f44c7d1c%40group.calendar.google.com/private-3ff574ba468ee7a4b521b549b685f814/basic.ics",
   "targets_csv_url": "https://docs.google.com/spreadsheets/d/e/2PACX-1vTPfRO3XcNMK2cgHjqF59NFyzlyWi5SGO-vfmOx1ag3KfVMYc7SGCi7HQzWT_FVG1oL0KuZjnjWva_i/pub?gid=0&single=true&output=csv",
   "event_map": {
     "1st Period": "p1",
