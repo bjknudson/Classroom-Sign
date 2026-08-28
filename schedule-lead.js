@@ -1,9 +1,9 @@
-// Schedule selection override: show the upcoming class one minute before it starts.
+// Schedule selection override: show the upcoming class x minutes before it starts.
 // Loaded after script.js and before DOMContentLoaded, so loop() uses this version.
 
 currentThread = async function currentThreadWithLead(now) {
   const tz = CFG.timezone || 'America/Los_Angeles';
-  const LEAD_MS = 60 * 1000;
+  const LEAD_MS = 2 * 60 * 1000; // 2 minutes
 
   const q = new URL(location.href).searchParams;
   const force = q.get('force');
