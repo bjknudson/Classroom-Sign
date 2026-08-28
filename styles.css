@@ -53,6 +53,13 @@ html, body {
 /* Emphasis color is readable */
 #content strong, #content b { color: var(--accent); font-weight: 800; }
 
+.playlist-title {
+  font-size: 1.15em;
+  font-weight: 700;
+  margin-bottom: 0.45em;
+  text-transform: none;
+}
+
 /* Lists: more breathing room + larger bullets alignment */
 #content ul, #content ol { margin: 0.4em 0 0.6em 1.1em; }
 #content li { margin: 0.25em 0; }
